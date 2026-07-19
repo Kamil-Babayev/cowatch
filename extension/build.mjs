@@ -12,6 +12,7 @@ async function copyStatic() {
   await mkdir('dist/popup', { recursive: true });
   await cp('manifest.json', 'dist/manifest.json');
   await cp('src/popup/index.html', 'dist/popup/index.html');
+  await cp('src/popup/popup.css', 'dist/popup/popup.css');
 }
 
 const buildOptions = {

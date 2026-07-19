@@ -1,0 +1,251 @@
+/*
+ * Design plan (see frontend-design skill's process — recorded here since
+ * there's no other place in this repo for design notes):
+ *
+ * Subject: a ~340px Firefox toolbar popup for a synchronized watch-party
+ * tool. Grounded in film-projection sync marks — the grease-pencil dot
+ * projectionists used to mark the exact frame to start a reel, and the
+ * amber tally light that shows when a camera is live. Both are literally
+ * about "are we in sync / are we live right now," which is what this
+ * popup's whole job is.
+ *
+ * Palette (named):
+ *   --ink        #17140F  near-black warm charcoal, background
+ *   --paper      #F1ECDF  warm bone white, primary text
+ *   --paper-dim  #9C9585  muted warm gray, secondary text/labels
+ *   --amber      #E8A33D  sync-mark amber, the one accent, "live" state
+ *   --amber-deep #5C4420  dimmed amber, borders / "idle" state
+ *   --rust       #C0532F  error state only, used sparingly
+ *
+ * Type: a monospace stack for the wordmark, labels, and the join-link
+ * itself (a technical, timecode-readout feel — fits "sync mark" more than
+ * a friendly rounded sans would), a system sans stack for actual
+ * sentence-length copy (status messages) so long text stays readable.
+ * No remote font loading — zero dependencies, no manifest CSP change,
+ * consistent with this project's whole pattern of avoiding unneeded
+ * machinery (see epic-1-report.md's YAML/Fiber notes, epic-2-report.md's
+ * ts-node/Jest notes).
+ *
+ * Signature element: the status dot next to the wordmark. Dim amber-deep
+ * when idle, solid lit amber with a slow pulse when a room is active —
+ * driven entirely by :has(), no new JS. Everything else stays quiet:
+ * flat fills, hairline borders, no gradients or shadows.
+ *
+ * Self-critique: dark background + single accent is one of the three
+ * generic AI-design patterns to actively avoid — kept anyway because
+ * amber-on-charcoal is a specific, sourced reference (tally lights, sync
+ * marks) rather than an arbitrary mood choice, and the monospace/timecode
+ * treatment throughout is what actually carries that reference, not the
+ * color alone.
+ */
+
+:root {
+  --ink: #17140f;
+  --paper: #f1ecdf;
+  --paper-dim: #9c9585;
+  --amber: #e8a33d;
+  --amber-deep: #5c4420;
+  --rust: #c0532f;
+
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --sans:
+    system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 16px;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--amber-deep);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  flex-shrink: 0;
+}
+
+/* The one bit of reactive styling in this whole file — reads the exact
+   `hidden` attribute index.ts already toggles on #room-view, no new JS. */
+body:has(#room-view:not([hidden])) .status-dot {
+  background: var(--amber);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(232 163 61 / 55%);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgb(232 163 61 / 0%);
+  }
+}
+
+.wordmark {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--paper);
+}
+
+.field-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--paper-dim);
+  margin-bottom: 6px;
+}
+
+#create-view label {
+  display: block;
+  margin-bottom: 14px;
+}
+
+select#control-mode {
+  width: 100%;
+  appearance: none;
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--amber-deep);
+  border-radius: 4px;
+  padding: 8px 28px 8px 10px;
+  font-family: var(--sans);
+  font-size: 13px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--paper-dim) 50%),
+    linear-gradient(135deg, var(--paper-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) center,
+    calc(100% - 11px) center;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+
+select#control-mode:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+p#no-video-message {
+  color: var(--rust);
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
+button {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button#create-room-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+button#create-room-btn:not(:disabled):hover {
+  background: #f0b45c;
+}
+
+#room-view p {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--paper-dim);
+  text-transform: uppercase;
+}
+
+input#join-url {
+  width: 100%;
+  background: #0f0d09;
+  color: var(--paper);
+  border: 1px solid var(--amber-deep);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+button#copy-link-btn {
+  width: 100%;
+  padding: 9px;
+  background: transparent;
+  color: var(--amber);
+  border: 1px solid var(--amber-deep);
+}
+
+button#copy-link-btn:hover {
+  border-color: var(--amber);
+}
+
+span#expiry-note {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--paper-dim);
+  margin: 10px 0 16px;
+}
+
+button#leave-room-btn {
+  width: 100%;
+  padding: 9px;
+  background: transparent;
+  color: var(--paper-dim);
+  border: 1px solid var(--amber-deep);
+}
+
+button#leave-room-btn:hover {
+  color: var(--rust);
+  border-color: var(--rust);
+}
+
+p#status {
+  min-height: 14px;
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: var(--paper-dim);
+}
+
+p#status:not(:empty) {
+  color: var(--amber);
+}

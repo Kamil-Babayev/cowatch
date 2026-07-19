@@ -3,12 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <title>CoWatch</title>
+    <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
+    <div class="brand">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span class="wordmark">COWATCH</span>
+    </div>
+
     <div id="create-view">
       <p id="no-video-message" hidden>No video detected on this page.</p>
       <label>
-        Control mode:
+        <span class="field-label">Control</span>
         <select id="control-mode">
           <option value="open">Anyone can control</option>
           <option value="host-only">Only I can control</option>
@@ -18,7 +24,7 @@
     </div>
 
     <div id="room-view" hidden>
-      <p>Room active.</p>
+      <p>Room active</p>
       <input id="join-url" type="text" readonly />
       <button id="copy-link-btn">Copy Link</button>
       <span id="expiry-note">Link expires in 10 minutes</span>
