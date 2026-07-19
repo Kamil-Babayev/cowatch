@@ -11,7 +11,7 @@ Derived from `cowatch-project-plan.md`. Ordered **Setup → Server → Extension
 | 0 — Setup | US-0 (1 story, 5 subtasks) | nothing |
 | 1 — Server Logic | US-1.1 – US-1.10 | Epic 0 |
 | 2 — Extension | US-2.1 – US-2.14 | Epic 1 (a running server to point at) |
-| 3 — UI / Frontend | US-3.1 – US-3.6 | Epic 2 (functional logic to skin, not rebuild) |
+| 3 — UI / Frontend | US-3.1 – US-3.6 (US-3.4 includes one small non-UI fix) | Epic 2 (functional logic to skin, and in one place, extend — not rebuild) |
 
 ---
 
@@ -161,33 +161,43 @@ Functional logic and minimal/no styling. Epic 3 re-skins this; it doesn't rebuil
 
 ## Epic 3 — UI / Frontend Handling
 
-Pure visual/UX layer over already-working logic. No new functional behavior anywhere in this epic.
+Mostly a visual/UX layer over already-working logic — **with one deliberate exception, US-3.4's local re-sync fix (see below).** This epic is grounded in the actual Epic 2 codebase (per `epic-2-report.md`), not the pre-implementation assumptions the original version of this section made — two of which turned out to be wrong; see Appendix A, Round 4.
+
+### US-3.0 (folded into US-3.1): CSS delivery decision
+No new bundler tooling needed. Plain `.css` files throughout:
+- In-page overlay (US-3.2): referenced via manifest's `content_scripts[0].css` array — Firefox injects it itself, no `<link>` tag needed since there's no HTML document to put one in.
+- Popup and landing page (US-3.1, US-3.5): plain `<link rel="stylesheet">` in their existing HTML.
+`build.mjs` only needs one addition: copy CSS files into `dist/` alongside the HTML it already copies (`copyStatic()`).
 
 ### US-3.1: Popup visual redesign
 *As a host, I want the popup to look intentional, so the tool feels trustworthy enough to actually share.*
-- Styles the create/leave/control-mode/copy-link states already functional since US-2.5/US-2.12/US-2.13.
+- Styles the **exact existing DOM** from US-2.5/US-2.12/US-2.13 — `#create-view`, `#control-mode`, `#create-room-btn`, `#room-view`, `#join-url`, `#copy-link-btn`, `#expiry-note`, `#leave-room-btn`, `#status`. No new elements, no ID changes — `popup/index.ts`'s existing `document.getElementById` calls must keep working untouched.
+- Establishes the CSS delivery pattern (US-3.0) other stories in this epic reuse.
 
 ### US-3.2: In-page overlay shell
 *As anyone in the room, I want a real control bar on the page itself, not just the toolbar popup, so I don't have to leave the video to manage the call.*
-- Shadow-DOM container holding the Jitsi camera tiles (already working since US-2.14), mic/camera toggles, Leave, and Copy Link — wraps the existing logic from US-2.5/US-2.12/US-2.14, doesn't reimplement it.
+- **Replaces** the bare `#cowatch-jitsi-controls` div `content/index.ts` already injects (US-2.14) — this is a real retrofit, not a clean-slate build. The original version of this story assumed Epic 2 never touched the page's DOM directly; it did.
+- Shadow-DOM container (so the host site's CSS can't clobber it) holding: the existing Jitsi iframe (already rendering its own participant video internally — this story sizes/positions that iframe, it does not build separate custom camera tiles), the existing `toggleAudio`/`toggleVideo` buttons re-skinned in place, and **new** Leave/Copy-Link buttons as a second, in-page entry point alongside the popup's — calling the exact same `leaveRoom` message and `mintFreshLink` API-client function already built in US-2.5/US-2.12, not new logic.
 
 ### US-3.3: Fullscreen re-parenting
 *As a viewer, I want the control bar to survive fullscreen, so I'm not stuck alt-tabbing out just to mute myself.*
 - On `fullscreenchange`, re-parent US-3.2's container into the browser's native fullscreen element and back.
 
-### US-3.4: Control & override indicators
-*As a participant, I want to see who's driving playback and fix a wrong video guess myself, so confusing moments have a visible way out.*
-- "Who has control" indicator rendered from the `isHost` data already wired in US-2.13.
-- "Select the video" overlay calling the candidate-list function already built in US-2.3.
-- Both are rendering tasks over existing data/logic — no new detection or server work.
+### US-3.4: Presence tracking, control indicator, and controlDenied recovery
+*As a participant, I want to see who's driving playback, fix a wrong video guess myself, and not end up silently out of sync if my own action gets rejected.*
+- **New, small, necessary logic** (not purely visual — flagged explicitly rather than smuggled in under "just rendering"): `content/index.ts` currently only `console.log`s `presenceUpdate` and `controlDenied` — neither is stored anywhere. Add a small state holder (latest presence list, own `isHost`, last `controlDenied` reason) for the UI below to actually render from.
+- "Who has control" indicator, rendered from that new state.
+- **The local re-sync fix**, this epic's one real exception to "no new functional behavior": in host-only mode, a non-host's native player action (e.g. clicking the site's own pause button) already moves their *local* video — only the broadcast gets blocked server-side (US-1.9). The project deliberately never wraps the site's native controls (§7.2 of the project plan), so "grey out the controls" isn't literally achievable for them. Instead: on receiving `controlDenied`, immediately send a `stateRequest` (reusing US-2.8's already-built path, no new message types) and reapply the authoritative state — so a rejected local action self-corrects within a second or two instead of leaving that participant permanently drifted with no way back in sync except luck.
+- "Select the video" overlay, calling the candidate-list function already fully built in US-2.3 (`listCandidates`/`selectOverride`/`clearOverride`) — this part of the original plan held up correctly; no changes needed here.
 
 ### US-3.5: Landing page visual design
 *As a joiner, I want the landing page to look like part of the same product, so clicking a friend's link feels safe.*
-- Styles the valid/expired/unknown/install-prompt states already functional since US-2.9/US-2.10.
+- Styles the **exact existing DOM** from US-2.9/US-2.10/US-2.11 — `#state-loading`, `#state-valid` (+ `#destination-domain`, `#continue-btn`), `#state-expired`, `#state-not-found`, `#state-no-extension`. `app.js`'s state-machine logic (including the 400ms extension-detection race — see `epic-2-report.md` tech debt #4) is untouched.
 
 ### US-3.6: Final polish pass
 *As anyone using it, I want consistent empty/error states everywhere, so nothing feels half-finished.*
-- Sweep popup, overlay, and landing page for missing loading/error states. No new features.
+- Sweep popup, overlay, and landing page for missing loading/error states.
+- Specifically confirm: the `controlDenied` indicator appears *and* disappears correctly (not just on first trigger), and Jitsi injection failure (`content/index.ts`'s existing `.catch`, currently console-only) gets a visible "video chat unavailable" state in the overlay instead of silently doing nothing.
 
 ---
 
@@ -213,3 +223,13 @@ Pure visual/UX layer over already-working logic. No new functional behavior anyw
 3. No further sequencing gaps found.
 
 **Verdict:** stable after Round 3 — every story only needs US-0's decisions plus strictly earlier stories' output. No open inconsistencies in ordering, dependencies, or scope.
+
+### Round 4 — after Epic 2 actually shipped, reviewing Epic 3 against real code
+Epic 3 was originally planned before Epic 1 or 2 existed. Two of Round 2's own findings turned out to be wrong once real code existed to check against — worth recording that a "confirmed, no issue" verdict from an earlier round isn't permanent if the thing it was checking hasn't been built yet.
+
+1. **Round 2 explicitly confirmed "Epic 2 never injects anything into the page itself"** — checked against the *plan* for US-2.14, not the code, since the code didn't exist yet. It turned out to be false: `content/index.ts` injects a bare `#cowatch-jitsi-controls` div with real buttons (added during Epic 2 build to satisfy US-2.14's own acceptance criteria, which the first implementation pass had actually missed and had to fix — see `epic-2-report.md` §1). → US-3.2 rewritten to explicitly replace that element, not build fresh.
+2. **Round 2 also confirmed "who has control" data reaches the client** (via `presence`'s `isHost` flag) **and treated that as sufficient** — it reaches `content/index.ts`, but is only ever `console.log`'d, never stored anywhere a UI could read it from. → US-3.4 now includes adding that small state holder explicitly, rather than assuming "the data exists" meant "the data is usable."
+3. **New gap, not foreseeable before Epic 2 existed:** host-only mode's `controlDenied` (added mid-Epic-1, after this sequence's original Epic 3 section was written) blocks the *broadcast* of a non-host's action, but nothing stops their *local* video from already having moved — and the project's own design never wraps the site's native player controls, so "grey out the controls" (the plan originally discussed) isn't achievable for them. → US-3.4 grew a small, explicitly-flagged non-UI fix: re-request and reapply authoritative state via the already-existing `stateRequest`/`stateResponse` path on every `controlDenied`.
+4. Re-confirmed US-3.1, US-3.3, US-3.5, and the "select the video" half of US-3.4 all still hold up exactly as originally planned — the exact DOM they style/wrap was checked directly against the real HTML/TS from Epic 2, not assumed.
+
+**Verdict:** Epic 3 revised and re-stabilized against the real Epic 2 codebase. The lesson worth keeping for Epic 4 or any future epic: a round that "confirms no issue" against a plan for work that hasn't been built yet should be re-checked once that work actually exists, not treated as settled.
