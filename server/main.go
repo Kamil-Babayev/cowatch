@@ -12,6 +12,7 @@ import (
 	"cowatch/internal/api"
 	"cowatch/internal/config"
 	"cowatch/internal/store"
+	"cowatch/internal/ws"
 )
 
 func main() {
@@ -22,11 +23,14 @@ func main() {
 
 	rooms := store.NewRoomStore()
 	tokens := store.NewTokenStore(cfg.TokenReapPeriod)
+	hub := ws.NewHub()
+	hub.OnRoomEmpty = rooms.Delete // rooms die on last-disconnect, not on a timer
 
 	mux := http.NewServeMux()
 	api.Register(mux, api.Deps{Rooms: rooms, Tokens: tokens, BaseURL: cfg.JoinBaseURL})
+	mux.Handle("GET /rooms/{roomId}/connect", ws.HandleConnect(hub, rooms, api.MakeCheckOrigin(cfg)))
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.RecoverMiddleware(mux)}
 
 	go func() {
 		log.Printf("listening on %s", cfg.Addr)

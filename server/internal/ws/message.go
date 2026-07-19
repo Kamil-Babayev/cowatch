@@ -17,10 +17,16 @@ const (
 	MsgTimeSync      = "timeSync"      // client → server → clients
 	MsgStateRequest  = "stateRequest"  // client → server
 	MsgStateResponse = "stateResponse" // server → client (direct, not broadcast)
+	MsgControlDenied = "controlDenied" // server → client, unicast
 )
+
+type ControlDeniedPayload struct {
+	Reason string `json:"reason"`
+}
 
 type PlaybackPayload struct {
 	CurrentTime float64 `json:"currentTime"`
+	IsPlaying   bool    `json:"isPlaying"`
 }
 
 type PresenceEntry struct {

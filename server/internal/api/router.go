@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 
 	"cowatch/internal/store"
 	"cowatch/static"
@@ -17,7 +18,8 @@ type Deps struct {
 
 func Register(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("GET /healthz", handleHealth)
-	mux.HandleFunc("POST /rooms", handleCreateRoom(deps))
+	createLimiter := newRateLimiter(5, time.Minute) // 5 rooms/IP/minute
+	mux.HandleFunc("POST /rooms", rateLimitMiddleware(createLimiter, handleCreateRoom(deps)))
 	mux.HandleFunc("GET /join/{token}", handleResolveJoin(deps))
 	mux.HandleFunc("POST /rooms/{roomId}/tokens", handleMintToken(deps))
 

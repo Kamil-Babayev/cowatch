@@ -29,6 +29,10 @@ func handleCreateRoom(deps Deps) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		if !isValidVideoURL(req.VideoURL) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "videoUrl must be a valid http(s) URL"})
+			return
+		}
 		if req.VideoURL == "" {
 			http.Error(w, "videoUrl is required", http.StatusBadRequest)
 			return
@@ -53,12 +57,10 @@ func handleCreateRoom(deps Deps) http.HandlerFunc {
 		resp := createRoomResponse{
 			RoomID:    room.ID,
 			JoinToken: token,
-			JoinURL:   deps.BaseURL + "/join/" + token,
+			JoinURL:   deps.BaseURL + "/join-page/?token=" + token, // was "/join/" + token — pointed at the JSON API, not the page
 			HostToken: room.HostToken,
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
+		writeJSON(w, http.StatusCreated, resp)
 	}
 }
 
@@ -90,7 +92,7 @@ func handleMintToken(deps Deps) http.HandlerFunc {
 
 		writeJSON(w, http.StatusCreated, mintTokenResponse{
 			JoinToken: token,
-			JoinURL:   deps.BaseURL + "/join/" + token,
+			JoinURL:   deps.BaseURL + "/join-page/?token=" + token,
 		})
 	}
 }

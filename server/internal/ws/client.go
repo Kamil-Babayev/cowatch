@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"cowatch/internal/store"
 	"encoding/json"
 	"log"
 	"time"
@@ -14,6 +15,7 @@ type client struct {
 	roomID string
 	isHost bool
 	send   chan Message
+	rooms  *store.RoomStore
 }
 
 func (c *client) readLoop(hub *Hub) {
@@ -33,22 +35,57 @@ func (c *client) readLoop(hub *Hub) {
 
 		switch msg.Type {
 		case MsgStateRequest:
-			// US-1.8 not built yet — there's no lastKnownState to answer
-			// with, so this is intentionally a no-op for now rather than
-			// fabricating a response.
-			continue
+			state, ok := c.rooms.PlaybackState(c.roomID)
+			if !ok {
+				// First person in the room — nothing cached yet. Their
+				// client just starts from wherever the page naturally is.
+				continue
+			}
+			payload, _ := json.Marshal(StateResponsePayload{
+				CurrentTime: state.CurrentTime,
+				IsPlaying:   state.IsPlaying,
+			})
+			hub.sendTo(c, Message{
+				Type:    MsgStateResponse,
+				Payload: payload,
+				// The moment this state was true, not "now" — US-2.8
+				// computes elapsed time since this timestamp.
+				Timestamp: state.UpdatedAt,
+			})
 
 		case MsgPlay, MsgPause, MsgSeeked, MsgTimeSync:
-			// This relay is what US-1.7 actually asks for. It falls out
-			// naturally from having a working read loop at all, so it's
-			// built here rather than artificially held back — but worth
-			// being explicit that US-1.7 is what this satisfies, not 1.6.
-			relay := Message{
+			room, ok := c.rooms.Get(c.roomID)
+			if !ok {
+				continue
+			}
+			if room.ControlMode == store.ControlModeHostOnly && !c.isHost {
+				payload, _ := json.Marshal(ControlDeniedPayload{Reason: "host-only room"})
+				hub.sendTo(c, Message{
+					Type:      MsgControlDenied,
+					Payload:   payload,
+					Timestamp: time.Now().UnixMilli(),
+				})
+				continue // still no cache update, still not relayed
+			}
+
+			var payload PlaybackPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				log.Printf("ws: bad payload for %q from %s: %v", msg.Type, c.id, err)
+				continue
+			}
+
+			now := time.Now().UnixMilli()
+			c.rooms.UpdatePlaybackState(c.roomID, store.PlaybackState{
+				CurrentTime: payload.CurrentTime,
+				IsPlaying:   payload.IsPlaying,
+				UpdatedAt:   now,
+			})
+
+			hub.broadcast(c.roomID, Message{
 				Type:      msg.Type,
 				Payload:   msg.Payload,
-				Timestamp: time.Now().UnixMilli(), // server-stamped, not client-supplied
-			}
-			hub.broadcast(c.roomID, relay, c)
+				Timestamp: now,
+			}, c)
 
 		default:
 			log.Printf("ws: unknown message type %q from %s", msg.Type, c.id)

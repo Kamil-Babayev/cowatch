@@ -10,13 +10,8 @@ import (
 	"cowatch/internal/store"
 )
 
-var upgrader = websocket.Upgrader{
-	// TODO(US-1.10): restrict this once real origins are known — wide
-	// open is fine for local dev, not for anything past that.
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
-func HandleConnect(hub *Hub, rooms *store.RoomStore) http.HandlerFunc {
+func HandleConnect(hub *Hub, rooms *store.RoomStore, checkOrigin func(*http.Request) bool) http.HandlerFunc {
+	upgrader := websocket.Upgrader{CheckOrigin: checkOrigin}
 	return func(w http.ResponseWriter, r *http.Request) {
 		roomID := r.PathValue("roomId")
 
@@ -45,6 +40,7 @@ func HandleConnect(hub *Hub, rooms *store.RoomStore) http.HandlerFunc {
 			roomID: roomID,
 			isHost: isHost,
 			send:   make(chan Message, 16),
+			rooms:  rooms,
 		}
 
 		hub.join(c)
