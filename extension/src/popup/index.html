@@ -1,11 +1,32 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    
-</body>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>CoWatch</title>
+  </head>
+  <body>
+    <div id="create-view">
+      <p id="no-video-message" hidden>No video detected on this page.</p>
+      <label>
+        Control mode:
+        <select id="control-mode">
+          <option value="open">Anyone can control</option>
+          <option value="host-only">Only I can control</option>
+        </select>
+      </label>
+      <button id="create-room-btn">Create Room</button>
+    </div>
+
+    <div id="room-view" hidden>
+      <p>Room active.</p>
+      <input id="join-url" type="text" readonly />
+      <button id="copy-link-btn">Copy Link</button>
+      <span id="expiry-note">Link expires in 10 minutes</span>
+      <button id="leave-room-btn">Leave Room</button>
+    </div>
+
+    <p id="status"></p>
+
+    <script src="index.js"></script>
+  </body>
 </html>

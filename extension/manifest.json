@@ -2,16 +2,25 @@
   "manifest_version": 3,
   "name": "CoWatch",
   "version": "0.1.0",
+  "description": "Sync video playback with friends on any site, plus video/voice chat.",
   "browser_specific_settings": {
     "gecko": { "id": "cowatch@yourdomain.dev" }
   },
   "background": {
     "scripts": ["background/index.js"]
   },
+  "permissions": ["storage", "tabs", "clipboardWrite"],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content/index.js"]
+    },
+    {
+      "matches": [
+        "http://localhost:8080/join-page/*",
+        "https://cowatch.app/join-page/*"
+      ],
+      "js": ["landing-bridge/index.js"]
     }
   ],
   "host_permissions": [

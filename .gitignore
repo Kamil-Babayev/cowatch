@@ -1,2 +1,51 @@
-.vscode
+#Go bin
 .exe
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Coverage
+coverage/
+
+# Cache
+.cache/
+.eslintcache
+.parcel-cache/
+.turbo/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Package manager files (optional)
+.pnpm-store/
+.npm/
+
+# Misc
+*.pid
+*.seed
+*.pid.lock

@@ -1,7 +1,31 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>CoWatch</title></head>
-<body>
-  <p>Join page placeholder — logic comes in Epic 2, styling in Epic 3.</p>
-</body>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CoWatch — Join</title>
+  </head>
+  <body>
+    <div id="state-loading">Checking your link...</div>
+
+    <div id="state-valid" hidden>
+      <p>This will open <strong id="destination-domain"></strong> to join the watch party.</p>
+      <button id="continue-btn">Continue</button>
+    </div>
+
+    <div id="state-expired" hidden>
+      <p>This link has expired. Ask whoever shared it for a fresh one.</p>
+    </div>
+
+    <div id="state-not-found" hidden>
+      <p>This link doesn't look right — double check it and try again.</p>
+    </div>
+
+    <div id="state-no-extension" hidden>
+      <p>You'll need the CoWatch extension installed first.</p>
+      <a href="https://addons.mozilla.org/" target="_blank" rel="noopener">Install CoWatch</a>
+      <p>Then reload this page.</p>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
 </html>

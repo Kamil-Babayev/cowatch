@@ -1,0 +1,25 @@
+{
+  "name": "cowatch-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "concurrently \"node build.mjs --watch\" \"web-ext run --source-dir dist\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/**/*.test.ts",
+    "test:coverage": "node --experimental-strip-types --experimental-test-coverage --test src/**/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^120.0.0",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^26.1.1",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^8.2.2",
+    "esbuild": "^0.23.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.5.0",
+    "web-ext": "^8.3.0",
+    "ws": "^8.21.1"
+  }
+}
