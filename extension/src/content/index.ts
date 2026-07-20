@@ -1,6 +1,7 @@
 import { VideoDetector } from './video-detector.ts';
 import { attachPlaybackListeners, type PlaybackEvent } from './playback-events.ts';
 import { injectJitsi, type JitsiHandle } from './jitsi.ts';
+import overlayStyles from './overlay.css';
 import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
 
 console.log('[CoWatch] content script loaded on', window.location.href);
@@ -55,22 +56,94 @@ function handleRemoteEvent(event: PlaybackEvent): void {
   }
 }
 
-function renderBareJitsiControls(handle: JitsiHandle): void {
-  const container = document.createElement('div');
-  container.id = 'cowatch-jitsi-controls';
+// --- US-3.2: in-page overlay -----------------------------------------
+//
+// Shadow DOM (so the host site's CSS can't clobber it, and so ours can't
+// leak out either). Replaces US-2.14's bare #cowatch-jitsi-controls div
+// entirely — that element never existed independently of this one.
 
-  const muteBtn = document.createElement('button');
-  muteBtn.textContent = 'Toggle Mic';
-  muteBtn.addEventListener('click', () => handle.toggleAudio());
+interface Overlay {
+  jitsiSlot: HTMLElement;
+  micBtn: HTMLButtonElement;
+  cameraBtn: HTMLButtonElement;
+  copyLinkBtn: HTMLButtonElement;
+  leaveBtn: HTMLButtonElement;
+  statusEl: HTMLElement;
+}
+
+let overlay: Overlay | null = null;
+
+function createOverlay(): Overlay {
+  const host = document.createElement('div');
+  host.id = 'cowatch-overlay-host';
+  document.body.appendChild(host);
+
+  const shadowRoot = host.attachShadow({ mode: 'open' });
+
+  const style = document.createElement('style');
+  style.textContent = overlayStyles;
+  shadowRoot.appendChild(style);
+
+  const bar = document.createElement('div');
+  bar.className = 'cowatch-bar';
+
+  const jitsiSlot = document.createElement('div');
+  jitsiSlot.className = 'cowatch-jitsi-slot';
+
+  const controls = document.createElement('div');
+  controls.className = 'cowatch-controls';
+
+  const micBtn = document.createElement('button');
+  micBtn.className = 'cowatch-btn';
+  micBtn.textContent = 'Mic';
+  micBtn.disabled = true; // enabled once Jitsi actually injects — see roomConnected handler
 
   const cameraBtn = document.createElement('button');
-  cameraBtn.textContent = 'Toggle Camera';
-  cameraBtn.addEventListener('click', () => handle.toggleVideo());
+  cameraBtn.className = 'cowatch-btn';
+  cameraBtn.textContent = 'Camera';
+  cameraBtn.disabled = true;
 
-  container.append(muteBtn, cameraBtn);
-  document.body.appendChild(container);
-  // Deliberately unstyled per US-2.14's own scope — Epic 3's US-3.2
-  // replaces this whole element with the real shadow-DOM overlay bar.
+  const copyLinkBtn = document.createElement('button');
+  copyLinkBtn.className = 'cowatch-btn';
+  copyLinkBtn.textContent = 'Copy Link';
+  copyLinkBtn.addEventListener('click', () => {
+    const msg: ToBackgroundMessage = { kind: 'requestFreshLink' };
+    browser.runtime.sendMessage(msg);
+  });
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.className = 'cowatch-btn cowatch-btn-danger';
+  leaveBtn.textContent = 'Leave';
+  leaveBtn.addEventListener('click', () => {
+    const msg: ToBackgroundMessage = { kind: 'leaveRoom' };
+    browser.runtime.sendMessage(msg);
+    teardownOverlay();
+  });
+
+  const statusEl = document.createElement('div');
+  statusEl.className = 'cowatch-status'; // US-3.4 renders "who has control" / controlDenied here
+
+  controls.append(micBtn, cameraBtn, copyLinkBtn, leaveBtn);
+  bar.append(jitsiSlot, controls, statusEl);
+  shadowRoot.appendChild(bar);
+
+  return { jitsiSlot, micBtn, cameraBtn, copyLinkBtn, leaveBtn, statusEl };
+}
+
+function teardownOverlay(): void {
+  jitsiHandle?.dispose();
+  jitsiHandle = null;
+  document.getElementById('cowatch-overlay-host')?.remove();
+  overlay = null;
+}
+
+function setStatusMessage(message: string, durationMs = 3000): void {
+  if (!overlay) return;
+  overlay.statusEl.textContent = message;
+  setTimeout(() => {
+    // Only clear if nothing newer has overwritten it in the meantime.
+    if (overlay?.statusEl.textContent === message) overlay.statusEl.textContent = '';
+  }, durationMs);
 }
 
 browser.runtime.onMessage.addListener((message: unknown) => {
@@ -89,9 +162,10 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     }
 
     case 'controlDenied':
-      // Epic 3 (US-3.4) renders this properly; for now, at least visible
-      // in the console rather than silently swallowed.
-      console.log('[CoWatch] control denied:', msg.reason);
+      // US-3.4 adds the local re-sync fix + a proper persistent
+      // indicator; for now, at least visible in the overlay rather than
+      // console-only.
+      setStatusMessage(`Denied: ${msg.reason}`);
       return;
 
     case 'presenceUpdate':
@@ -104,18 +178,36 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       // determine its own roomId any other way.
       if (!jitsiHandle && !jitsiInjecting) {
         jitsiInjecting = true;
-        injectJitsi(msg.roomId)
+        overlay = createOverlay();
+        injectJitsi(msg.roomId, overlay.jitsiSlot)
           .then((handle) => {
             jitsiHandle = handle;
-            renderBareJitsiControls(handle);
+            if (overlay) {
+              overlay.micBtn.disabled = false;
+              overlay.cameraBtn.disabled = false;
+              overlay.micBtn.addEventListener('click', () => handle.toggleAudio());
+              overlay.cameraBtn.addEventListener('click', () => handle.toggleVideo());
+            }
           })
           .catch((err) => {
             console.error('[CoWatch] Jitsi injection failed:', err);
+            setStatusMessage('Video chat unavailable', 10_000);
           })
           .finally(() => {
             jitsiInjecting = false;
           });
       }
+      return;
+
+    case 'freshLinkResult':
+      navigator.clipboard
+        .writeText(msg.joinUrl)
+        .then(() => setStatusMessage('Link copied'))
+        .catch(() => setStatusMessage('Copied, but clipboard write failed'));
+      return;
+
+    case 'freshLinkError':
+      setStatusMessage(msg.message);
       return;
   }
 });

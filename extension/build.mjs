@@ -37,6 +37,15 @@ const buildOptions = {
     // and esbuild agree on what it is.
     '__SERVER_BASE_URL__': JSON.stringify(serverBaseURL),
   },
+  loader: {
+    // US-3.2: the in-page overlay lives in a shadow root, which manifest
+    // content_scripts.css can't reach (shadow DOM blocks page-level
+    // stylesheets same as it blocks the host site's own CSS). Importing
+    // CSS as a raw string and injecting it as an inline <style> inside
+    // the shadow root sidesteps that entirely — no web_accessible_resources
+    // needed either, unlike a <link> to a packaged CSS file would.
+    '.css': 'text',
+  },
 };
 
 async function run() {

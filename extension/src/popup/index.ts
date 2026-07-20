@@ -1,4 +1,4 @@
-import { createRoom, mintFreshLink, type ControlMode } from './api-client.ts';
+import { createRoom, mintFreshLink, type ControlMode } from '../shared/api-client.ts';
 import type { ToBackgroundMessage } from '../shared/runtime-messages.ts';
 
 console.log('[CoWatch] popup loaded');

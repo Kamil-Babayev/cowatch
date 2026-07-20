@@ -164,10 +164,9 @@ Functional logic and minimal/no styling. Epic 3 re-skins this; it doesn't rebuil
 Mostly a visual/UX layer over already-working logic — **with one deliberate exception, US-3.4's local re-sync fix (see below).** This epic is grounded in the actual Epic 2 codebase (per `epic-2-report.md`), not the pre-implementation assumptions the original version of this section made — two of which turned out to be wrong; see Appendix A, Round 4.
 
 ### US-3.0 (folded into US-3.1): CSS delivery decision
-No new bundler tooling needed. Plain `.css` files throughout:
-- In-page overlay (US-3.2): referenced via manifest's `content_scripts[0].css` array — Firefox injects it itself, no `<link>` tag needed since there's no HTML document to put one in.
-- Popup and landing page (US-3.1, US-3.5): plain `<link rel="stylesheet">` in their existing HTML.
-`build.mjs` only needs one addition: copy CSS files into `dist/` alongside the HTML it already copies (`copyStatic()`).
+No new bundler tooling needed for popup/landing page. Plain `.css` files, `<link rel="stylesheet">` in their existing HTML (US-3.1, US-3.5). `build.mjs` copies these into `dist/` alongside the HTML it already copies.
+
+**Corrected while actually building US-3.2** (this section originally said the in-page overlay's CSS would go through manifest's `content_scripts[0].css` array — that's wrong): a shadow DOM root is isolated from page-level stylesheets by design, the same isolation that keeps the host site's CSS out also keeps `content_scripts.css` out. The overlay's CSS is instead imported as a raw string via esbuild's `loader: { '.css': 'text' }` and injected as an inline `<style>` directly inside the shadow root — no manifest changes, no `web_accessible_resources` needed (which a `<link>` to a packaged CSS file would have required instead, since a page-inserted `moz-extension://` reference needs that declared).
 
 ### US-3.1: Popup visual redesign
 *As a host, I want the popup to look intentional, so the tool feels trustworthy enough to actually share.*

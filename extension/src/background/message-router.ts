@@ -19,6 +19,16 @@ export interface SessionStorageAPI {
   remove(keys: string[]): void | Promise<void>;
 }
 
+/**
+ * Minimal surface of shared/api-client.ts's mintFreshLink this router
+ * needs — injected for the same reason as TabsAPI/SessionStorageAPI:
+ * testable with a fake in Node, real fetch only ever wired in
+ * background/index.ts.
+ */
+export interface LinkMinter {
+  mintFreshLink(roomId: string, hostToken: string): Promise<{ joinUrl: string; joinToken: string }>;
+}
+
 export interface MessageSender {
   tab?: { id?: number };
 }
@@ -27,6 +37,7 @@ export function createMessageRouter(
   roomManager: RoomManager,
   tabs: TabsAPI,
   sessionStorage: SessionStorageAPI,
+  linkMinter: LinkMinter,
 ) {
   return async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<void> {
     const tabId = sender.tab?.id;
@@ -76,6 +87,28 @@ export function createMessageRouter(
           await sessionStorage.remove([key]);
         }
         await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId });
+        return;
+      }
+
+      case 'requestFreshLink': {
+        const session = roomManager.getSession(tabId);
+        if (!session || !session.hostToken) {
+          // Either no active session for this tab, or this tab isn't the
+          // host — distinct from a network/server failure, worth telling
+          // the overlay apart so it doesn't imply "try again" for
+          // something retrying won't fix.
+          await tabs.sendMessage(tabId, {
+            kind: 'freshLinkError',
+            message: 'Only the host can generate a new link',
+          });
+          return;
+        }
+        try {
+          const result = await linkMinter.mintFreshLink(session.roomId, session.hostToken);
+          await tabs.sendMessage(tabId, { kind: 'freshLinkResult', joinUrl: result.joinUrl });
+        } catch (err) {
+          await tabs.sendMessage(tabId, { kind: 'freshLinkError', message: (err as Error).message });
+        }
         return;
       }
     }

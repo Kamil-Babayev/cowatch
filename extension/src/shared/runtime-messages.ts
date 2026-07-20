@@ -18,7 +18,12 @@ export type ToBackgroundMessage =
   // scripts have no synchronous way to learn their own tabId
   // (browser.tabs.getCurrent() isn't available there), so background
   // answers using sender.tab.id, which it does have.
-  | { kind: 'checkPendingJoin' };
+  | { kind: 'checkPendingJoin' }
+  // US-3.2: the in-page overlay's Copy Link button needs a fresh join
+  // link, but only background retains the hostToken (via RoomManager's
+  // session state) needed to call the server's mint-token endpoint — the
+  // content script itself never has it.
+  | { kind: 'requestFreshLink' };
 
 /** Background -> content script (for a specific tab) */
 export type ToContentMessage =
@@ -33,4 +38,10 @@ export type ToContentMessage =
   // connectRoom) — content/index.ts needs its own roomId either way to
   // derive a matching Jitsi room name (US-2.14), and only background
   // reliably knows it on both paths.
-  | { kind: 'roomConnected'; roomId: string };
+  | { kind: 'roomConnected'; roomId: string }
+  // Replies to requestFreshLink. Split into two variants rather than one
+  // with an optional error field — a non-host tab (or one whose session
+  // vanished) has no hostToken to mint with at all, which is worth
+  // distinguishing from an actual network/server failure.
+  | { kind: 'freshLinkResult'; joinUrl: string }
+  | { kind: 'freshLinkError'; message: string };

@@ -18,6 +18,8 @@ export interface RoomManagerCallbacks {
 
 interface Session {
   connection: RoomConnection;
+  roomId: string;
+  hostToken: string | undefined;
   isHost: boolean;
   timeSyncTimer: ReturnType<typeof setInterval> | null;
   // The most recent local currentTime/isPlaying this tab reported — used
@@ -25,6 +27,12 @@ interface Session {
   // heartbeat always reflects genuinely current state rather than a stale
   // snapshot from whenever the room was first joined.
   lastLocalState: { currentTime: number; isPlaying: boolean } | null;
+}
+
+export interface SessionInfo {
+  roomId: string;
+  hostToken: string | undefined;
+  isHost: boolean;
 }
 
 // No TS constructor parameter-property shorthand — see video-detector.ts's
@@ -45,7 +53,14 @@ export class RoomManager {
       this.handleMessage(tabId, msg, callbacks),
     );
 
-    const session: Session = { connection, isHost, timeSyncTimer: null, lastLocalState: null };
+    const session: Session = {
+      connection,
+      roomId,
+      hostToken,
+      isHost,
+      timeSyncTimer: null,
+      lastLocalState: null,
+    };
     this.sessions.set(tabId, session);
 
     // Must wait for the socket to actually be open — sending while still
@@ -58,6 +73,13 @@ export class RoomManager {
     if (isHost) {
       session.timeSyncTimer = setInterval(() => this.sendTimeSync(tabId), TIME_SYNC_INTERVAL_MS);
     }
+  }
+
+  /** US-3.2: lets the message router look up a tab's roomId/hostToken for the fresh-link round trip. */
+  getSession(tabId: number): SessionInfo | undefined {
+    const session = this.sessions.get(tabId);
+    if (!session) return undefined;
+    return { roomId: session.roomId, hostToken: session.hostToken, isHost: session.isHost };
   }
 
   disconnect(tabId: number): void {

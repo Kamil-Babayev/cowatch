@@ -73,13 +73,31 @@ async function deriveJitsiRoomName(roomId: string): Promise<string> {
  * silently when verifying this by hand, that attribute is the first
  * thing to check.
  */
-export async function injectJitsi(roomId: string): Promise<JitsiHandle> {
+/**
+ * Injects the Jitsi IFrame API and starts a call for this room. The
+ * generated iframe needs camera/mic permission delegation
+ * (`allow="camera *; microphone *; display-capture *"`) — Jitsi's own
+ * IFrame API sets this on the iframe it creates; if getUserMedia fails
+ * silently when verifying this by hand, that attribute is the first
+ * thing to check.
+ *
+ * `parentNode` lets US-3.2 pass its shadow-DOM slot directly, so the
+ * iframe lives inside the overlay's shadow root rather than loose in
+ * `document.body`. Falls back to creating (and appending) its own div if
+ * omitted, for any caller that doesn't need shadow-DOM placement.
+ */
+export async function injectJitsi(roomId: string, parentNode?: HTMLElement): Promise<JitsiHandle> {
   await loadJitsiScript();
   const jitsiRoomName = await deriveJitsiRoomName(roomId);
 
-  const container = document.createElement('div');
-  container.id = 'cowatch-jitsi-container';
-  document.body.appendChild(container);
+  const container =
+    parentNode ??
+    (() => {
+      const div = document.createElement('div');
+      div.id = 'cowatch-jitsi-container';
+      document.body.appendChild(div);
+      return div;
+    })();
 
   const ExternalAPI = window.JitsiMeetExternalAPI;
   if (!ExternalAPI) {

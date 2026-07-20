@@ -1,14 +1,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMessageRouter, type TabsAPI, type SessionStorageAPI } from './message-router.ts';
+import { createMessageRouter, type TabsAPI, type SessionStorageAPI, type LinkMinter } from './message-router.ts';
 
-function makeFakeRoomManager() {
+function makeFakeRoomManager(sessions: Record<number, { roomId: string; hostToken?: string; isHost: boolean }> = {}) {
   const calls: { method: string; args: unknown[] }[] = [];
   return {
     calls,
     connect: (...args: unknown[]) => calls.push({ method: 'connect', args }),
     disconnect: (...args: unknown[]) => calls.push({ method: 'disconnect', args }),
     reportLocalEvent: (...args: unknown[]) => calls.push({ method: 'reportLocalEvent', args }),
+    getSession: (tabId: number) => sessions[tabId],
+  };
+}
+
+function makeFakeLinkMinter(
+  impl: (roomId: string, hostToken: string) => Promise<{ joinUrl: string; joinToken: string }> = async (
+    _roomId,
+    _hostToken,
+  ) => ({ joinUrl: 'http://x/join-page/?token=fresh', joinToken: 'fresh' }),
+): LinkMinter & { calls: unknown[] } {
+  const calls: unknown[] = [];
+  return {
+    calls,
+    mintFreshLink: (roomId, hostToken) => {
+      calls.push({ roomId, hostToken });
+      return impl(roomId, hostToken);
+    },
   };
 }
 
@@ -49,7 +66,7 @@ test('ignores messages with no tab id (not from a content script)', async () => 
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'leaveRoom' }, {});
 
@@ -60,7 +77,7 @@ test('localPlaybackEvent forwards to roomManager.reportLocalEvent with the right
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   const event = { type: 'play' as const, currentTime: 5, isPlaying: true };
   await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 } });
@@ -72,7 +89,7 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'connectRoom', roomId: 'room-1', hostToken: 'tok' }, { tab: { id: 7 } });
 
@@ -114,7 +131,7 @@ test('joinRequested stores pendingRoomId keyed by tab and navigates the tab', as
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle(
     { kind: 'joinRequested', roomId: 'room-9', videoUrl: 'https://example.com/watch' },
@@ -129,7 +146,7 @@ test('leaveRoom disconnects the right tab', async () => {
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'leaveRoom' }, { tab: { id: 99 } });
 
@@ -140,7 +157,7 @@ test('extensionInstalledCheck replies on the same tab', async () => {
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'extensionInstalledCheck' }, { tab: { id: 5 } });
 
@@ -152,7 +169,7 @@ test('checkPendingJoin returns the stored roomId and clears it after reading', a
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
   storage.stored['pendingRoomId:11'] = 'room-abc';
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'checkPendingJoin' }, { tab: { id: 11 } });
 
@@ -164,9 +181,75 @@ test('checkPendingJoin returns null when nothing is pending for this tab', async
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage);
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
 
   await handle({ kind: 'checkPendingJoin' }, { tab: { id: 12 } });
 
   assert.deepEqual(tabs.sent, [{ tabId: 12, message: { kind: 'pendingJoinResult', roomId: null } }]);
+});
+
+test('requestFreshLink mints via the injected LinkMinter and replies with the result', async () => {
+  const roomManager = makeFakeRoomManager({ 20: { roomId: 'room-20', hostToken: 'host-tok-20', isHost: true } });
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const linkMinter = makeFakeLinkMinter(async (roomId, hostToken) => {
+    assert.equal(roomId, 'room-20');
+    assert.equal(hostToken, 'host-tok-20');
+    return { joinUrl: 'http://x/join-page/?token=abc', joinToken: 'abc' };
+  });
+  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
+
+  await handle({ kind: 'requestFreshLink' }, { tab: { id: 20 } });
+
+  assert.equal(linkMinter.calls.length, 1);
+  assert.deepEqual(tabs.sent, [
+    { tabId: 20, message: { kind: 'freshLinkResult', joinUrl: 'http://x/join-page/?token=abc' } },
+  ]);
+});
+
+test('requestFreshLink replies with freshLinkError when the tab has no host session', async () => {
+  const roomManager = makeFakeRoomManager(); // no session for tab 21 at all
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const linkMinter = makeFakeLinkMinter();
+  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
+
+  await handle({ kind: 'requestFreshLink' }, { tab: { id: 21 } });
+
+  assert.equal(linkMinter.calls.length, 0); // never even attempted
+  assert.deepEqual(tabs.sent, [
+    { tabId: 21, message: { kind: 'freshLinkError', message: 'Only the host can generate a new link' } },
+  ]);
+});
+
+test('requestFreshLink replies with freshLinkError when the tab is a joiner, not the host', async () => {
+  // Present in the room, but hostToken is undefined — a non-host session.
+  const roomManager = makeFakeRoomManager({ 22: { roomId: 'room-22', hostToken: undefined, isHost: false } });
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const linkMinter = makeFakeLinkMinter();
+  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
+
+  await handle({ kind: 'requestFreshLink' }, { tab: { id: 22 } });
+
+  assert.equal(linkMinter.calls.length, 0);
+  assert.deepEqual(tabs.sent, [
+    { tabId: 22, message: { kind: 'freshLinkError', message: 'Only the host can generate a new link' } },
+  ]);
+});
+
+test('requestFreshLink replies with freshLinkError when minting itself fails', async () => {
+  const roomManager = makeFakeRoomManager({ 23: { roomId: 'room-23', hostToken: 'tok', isHost: true } });
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const linkMinter = makeFakeLinkMinter(async () => {
+    throw new Error('mintFreshLink failed (401)');
+  });
+  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
+
+  await handle({ kind: 'requestFreshLink' }, { tab: { id: 23 } });
+
+  assert.deepEqual(tabs.sent, [
+    { tabId: 23, message: { kind: 'freshLinkError', message: 'mintFreshLink failed (401)' } },
+  ]);
 });

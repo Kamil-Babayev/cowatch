@@ -1,6 +1,7 @@
 import { SERVER_BASE_URL } from '../shared/config.ts';
+import { mintFreshLink } from '../shared/api-client.ts';
 import { RoomManager } from './room-manager.ts';
-import { createMessageRouter, type TabsAPI, type SessionStorageAPI } from './message-router.ts';
+import { createMessageRouter, type TabsAPI, type SessionStorageAPI, type LinkMinter } from './message-router.ts';
 import type { ToBackgroundMessage } from '../shared/runtime-messages.ts';
 
 console.log('[CoWatch] background script loaded, server:', SERVER_BASE_URL);
@@ -21,7 +22,9 @@ const sessionStorageAdapter: SessionStorageAPI = {
   remove: (keys) => browser.storage.session.remove(keys),
 };
 
-const handleMessage = createMessageRouter(roomManager, tabsAdapter, sessionStorageAdapter);
+const linkMinterAdapter: LinkMinter = { mintFreshLink };
+
+const handleMessage = createMessageRouter(roomManager, tabsAdapter, sessionStorageAdapter, linkMinterAdapter);
 
 browser.runtime.onMessage.addListener((message: unknown, sender) => {
   handleMessage(message as ToBackgroundMessage, sender);
