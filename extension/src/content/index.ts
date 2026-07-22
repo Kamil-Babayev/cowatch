@@ -1,6 +1,7 @@
 import { VideoDetector } from './video-detector.ts';
 import { attachPlaybackListeners, type PlaybackEvent } from './playback-events.ts';
 import { injectJitsi, type JitsiHandle } from './jitsi.ts';
+import { setupFullscreenReparenting } from './overlay-fullscreen.ts';
 import overlayStyles from './overlay.css';
 import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
 
@@ -63,12 +64,14 @@ function handleRemoteEvent(event: PlaybackEvent): void {
 // entirely — that element never existed independently of this one.
 
 interface Overlay {
+  hostEl: HTMLElement;
   jitsiSlot: HTMLElement;
   micBtn: HTMLButtonElement;
   cameraBtn: HTMLButtonElement;
   copyLinkBtn: HTMLButtonElement;
   leaveBtn: HTMLButtonElement;
   statusEl: HTMLElement;
+  stopFullscreenReparenting: () => void;
 }
 
 let overlay: Overlay | null = null;
@@ -127,13 +130,20 @@ function createOverlay(): Overlay {
   bar.append(jitsiSlot, controls, statusEl);
   shadowRoot.appendChild(bar);
 
-  return { jitsiSlot, micBtn, cameraBtn, copyLinkBtn, leaveBtn, statusEl };
+  // US-3.3: keeps the bar visible when the page (or the video itself)
+  // goes fullscreen — anything not inside the fullscreen element stops
+  // rendering entirely otherwise, since real Firefox fullscreen behaves
+  // this way regardless of z-index.
+  const stopFullscreenReparenting = setupFullscreenReparenting(host, document.body);
+
+  return { hostEl: host, jitsiSlot, micBtn, cameraBtn, copyLinkBtn, leaveBtn, statusEl, stopFullscreenReparenting };
 }
 
 function teardownOverlay(): void {
   jitsiHandle?.dispose();
   jitsiHandle = null;
-  document.getElementById('cowatch-overlay-host')?.remove();
+  overlay?.stopFullscreenReparenting();
+  overlay?.hostEl.remove();
   overlay = null;
 }
 
