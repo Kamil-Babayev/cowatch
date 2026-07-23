@@ -15,18 +15,21 @@ function makeCallbacks(): RoomManagerCallbacks & {
   timeSyncs: unknown[];
   denials: string[];
   presences: unknown[];
+  connectionStates: string[];
 } {
   const remoteEvents: unknown[] = [];
   const authoritativeStates: unknown[] = [];
   const timeSyncs: unknown[] = [];
   const denials: string[] = [];
   const presences: unknown[] = [];
+  const connectionStates: string[] = [];
   return {
     remoteEvents,
     authoritativeStates,
     timeSyncs,
     denials,
     presences,
+    connectionStates,
     onRemotePlayback: (e) => remoteEvents.push(e),
     onAuthoritativeState: (state, source) => authoritativeStates.push({ state, source }),
     onTimeSync: (state, timestamp) => timeSyncs.push({ state, timestamp }),
@@ -34,7 +37,7 @@ function makeCallbacks(): RoomManagerCallbacks & {
     onPresence: (p) => presences.push(p),
     onSession: () => undefined,
     onRoomClosed: () => undefined,
-    onConnectionState: () => undefined,
+    onConnectionState: (state) => connectionStates.push(state),
   };
 }
 
@@ -78,20 +81,37 @@ async function waitForServerSocket(): Promise<WSConnection> {
   throw new Error('timed out waiting for test WebSocket connection');
 }
 
-test('reportLocalEvent sends a correctly-shaped message to the server', async () => {
+async function waitForCondition(
+  predicate: () => boolean,
+  message: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(message);
+}
+
+test('reportLocalEvent sends a correctly-shaped message to the server', async (t) => {
   const manager = new RoomManager();
+  t.after(() => manager.disconnect(1));
   const cb = makeCallbacks();
   manager.connect(1, 'room-1', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
+  await waitForServerSocket();
+  await waitForCondition(
+    () => cb.connectionStates.includes('connected'),
+    'timed out waiting for the client WebSocket to open',
+  );
 
   manager.reportLocalEvent(1, { type: 'play', currentTime: 12.3, isPlaying: true });
-  await new Promise((r) => setTimeout(r, 50));
+  await waitForCondition(
+    () => serverReceived.some((message) => (message as { type: string }).type === 'play'),
+    'timed out waiting for the server to receive the playback event',
+  );
 
   const playMsgs = serverReceived.filter((m) => (m as { type: string }).type === 'play');
   assert.equal(playMsgs.length, 1);
   assert.deepEqual((playMsgs[0] as { payload: unknown }).payload, { currentTime: 12.3, isPlaying: true });
-
-  manager.disconnect(1);
 });
 
 test('a remote play message triggers onRemotePlayback with the right shape', async () => {

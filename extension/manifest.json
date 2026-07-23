@@ -22,18 +22,11 @@
       "js": ["vendor/jitsi-external-api.js", "content/index.js"]
     },
     {
-      "matches": [
-        "http://localhost:8080/join-page/*",
-        "https://cowatch.app/join-page/*"
-      ],
+      "matches": ["http://localhost/join-page/*"],
       "js": ["landing-bridge/index.js"]
     }
   ],
-  "host_permissions": [
-    "<all_urls>",
-    "http://localhost:8080/*",
-    "https://cowatch.app/*"
-  ],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup/index.html"
   }

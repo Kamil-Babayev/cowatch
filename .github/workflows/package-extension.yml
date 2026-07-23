@@ -1,0 +1,46 @@
+name: Package early-test extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_base_url:
+        description: Public CoWatch origin, for example http://203.0.113.10:8080
+        required: true
+        type: string
+      jitsi_domain:
+        description: Jitsi hostname
+        required: false
+        default: meet.jit.si
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Test and package Firefox extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    env:
+      SERVER_BASE_URL: ${{ inputs.server_base_url }}
+      JITSI_DOMAIN: ${{ inputs.jitsi_domain }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run package
+      - name: Upload unsigned Firefox ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: cowatch-firefox-${{ github.run_number }}
+          path: extension/artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 7

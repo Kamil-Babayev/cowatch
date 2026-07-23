@@ -1,7 +1,8 @@
 IMAGE_NAME := cowatch-server
 PORT       := 8080
+JOIN_BASE_URL ?= http://localhost:$(PORT)
 
-.PHONY: go-build go-run go-test go-test-cover go-test-race docker-build docker-run install dev build typecheck lint test test-coverage verify
+.PHONY: go-build go-run go-test go-test-cover go-test-race docker-build docker-run install dev build package typecheck lint test test-coverage verify
 
 install:
 	npm --prefix extension ci
@@ -11,6 +12,9 @@ dev:
 
 build:
 	npm --prefix extension run build
+
+package:
+	npm --prefix extension run package
 
 typecheck:
 	npm --prefix extension run typecheck
@@ -40,12 +44,12 @@ go-test-race:
 	cd server && go test -race ./...
 
 docker-build:
-	docker build -t $(IMAGE_NAME) -f server/Dockerfile ./server
+	docker build --platform linux/amd64 -t $(IMAGE_NAME) -f server/Dockerfile ./server
 
 docker-run:
 	docker run --rm -p $(PORT):$(PORT) \
 		-e ADDR=:$(PORT) \
-		-e JOIN_BASE_URL=http://localhost:$(PORT) \
+		-e JOIN_BASE_URL=$(JOIN_BASE_URL) \
 		$(IMAGE_NAME)
 
 verify: go-test typecheck test-coverage build lint

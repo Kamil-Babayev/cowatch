@@ -1,18 +1,29 @@
 import * as esbuild from 'esbuild';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { loadBuildConfig } from './build-config.mjs';
 
 const watch = process.argv.includes('--watch');
 
 // The one place SERVER_BASE_URL is decided for a given build — swapped via
 // env var at build time (`SERVER_BASE_URL=https://cowatch.app npm run build`),
 // never hardcoded in logic files. Defaults to local dev.
-const serverBaseURL = process.env.SERVER_BASE_URL ?? 'http://localhost:8080';
-const jitsiDomain = process.env.JITSI_DOMAIN ?? 'meet.jit.si';
+const { serverBaseURL, jitsiDomain, landingMatch } = loadBuildConfig();
 
 async function copyStatic() {
   await mkdir('dist/popup', { recursive: true });
   await mkdir('dist/vendor', { recursive: true });
-  await cp('manifest.json', 'dist/manifest.json');
+  const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+  const landingBridge = manifest.content_scripts.find((entry) =>
+    entry.js?.includes('landing-bridge/index.js'),
+  );
+  if (!landingBridge) {
+    throw new Error('manifest is missing the landing bridge content script');
+  }
+  landingBridge.matches = [landingMatch];
+  await writeFile(
+    'dist/manifest.json',
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
   await cp('src/popup/index.html', 'dist/popup/index.html');
   await cp('src/popup/popup.css', 'dist/popup/popup.css');
   const jitsiSource = await readFile('vendor/jitsi-external-api.js', 'utf8');
@@ -71,10 +82,14 @@ async function run() {
   if (watch) {
     const ctx = await esbuild.context(buildOptions);
     await ctx.watch();
-    console.log(`watching for changes (SERVER_BASE_URL=${serverBaseURL})...`);
+    console.log(
+      `watching for changes (SERVER_BASE_URL=${serverBaseURL}, landing match=${landingMatch})...`,
+    );
   } else {
     await esbuild.build(buildOptions);
-    console.log(`build complete (SERVER_BASE_URL=${serverBaseURL}, JITSI_DOMAIN=${jitsiDomain})`);
+    console.log(
+      `build complete (SERVER_BASE_URL=${serverBaseURL}, landing match=${landingMatch}, JITSI_DOMAIN=${jitsiDomain})`,
+    );
   }
 }
 

@@ -60,6 +60,95 @@ Load a production build manually from Firefox:
 3. Choose **Load Temporary Add-on**.
 4. Select `extension/dist/manifest.json`.
 
+## Public-IP early test
+
+This is a temporary two-person test setup, not a production deployment.
+Using raw HTTP exposes destination URLs, room credentials, and playback
+metadata to the networks between each browser and the server. Close the
+forwarded port when the test is over.
+
+### 1. Prepare Docker Hub and GitHub
+
+1. Create a public Docker Hub repository named `cowatch-server`.
+2. Create a Docker Hub access token with permission to push that repository.
+   Do not use your Docker Hub account password.
+3. In the GitHub repository, add the Actions variable
+   `DOCKERHUB_USERNAME`.
+4. Add the Actions secret `DOCKERHUB_TOKEN`.
+5. Push to `master`. After both server and extension checks pass, the workflow
+   publishes:
+   - `DOCKERHUB_USERNAME/cowatch-server:latest`
+   - `DOCKERHUB_USERNAME/cowatch-server:sha-<commit>`
+
+The SHA tag provides a rollback target. Publishing an image does not restart
+the computer hosting CoWatch.
+
+### 2. Confirm the connection can be forwarded
+
+Compare the router's WAN IPv4 address with the public IPv4 reported by an
+external IP-check service. Direct forwarding will not work if the WAN address
+is private (`10/8`, `172.16/12`, `192.168/16`) or in the carrier-grade NAT
+range `100.64/10`; in that case, ask the ISP for a public IPv4 or use a VPN
+overlay instead.
+
+Reserve the Docker host's LAN address, allow inbound TCP 8080 in its firewall,
+and forward router TCP 8080 to that host's TCP 8080.
+
+### 3. Run the server
+
+Replace `USERNAME` and `PUBLIC_IP`:
+
+```sh
+docker pull USERNAME/cowatch-server:latest
+docker run -d \
+  --name cowatch \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e ADDR=:8080 \
+  -e JOIN_BASE_URL=http://PUBLIC_IP:8080 \
+  USERNAME/cowatch-server:latest
+```
+
+Verify the non-root runtime and health:
+
+```sh
+docker inspect --format '{{.Config.User}}' cowatch
+curl http://PUBLIC_IP:8080/healthz
+```
+
+Test the health URL from another network, such as a phone with Wi-Fi disabled.
+Testing only from inside the home network can give a false negative on routers
+without NAT loopback.
+
+### 4. Package and install the extension
+
+1. Open GitHub **Actions** → **Package early-test extension**.
+2. Choose **Run workflow**.
+3. Enter exactly `http://PUBLIC_IP:8080` for `server_base_url`.
+4. Keep `meet.jit.si` as `jitsi_domain`.
+5. Download the `cowatch-firefox-*` artifact when the workflow completes.
+6. Extract GitHub's outer artifact archive and send the inner CoWatch ZIP to
+   the other participant.
+7. In Firefox 140+, open `about:debugging#/runtime/this-firefox`, choose
+   **Load Temporary Add-on**, and select the CoWatch ZIP.
+
+The unsigned extension is removed when Firefox restarts and must then be
+loaded again through `about:debugging`. A changed public IP requires both a
+new container `JOIN_BASE_URL` and a newly packaged extension using that URL.
+
+### 5. Verify and shut down
+
+Test open and host-only rooms, play/pause/seek, fresh links, multiple-video
+selection, Jitsi permissions, and host departure. Then remove the service and
+close both firewall and router rules:
+
+```sh
+docker rm -f cowatch
+```
+
+For continued use, move to a stable hostname with HTTPS/WSS instead of leaving
+this HTTP endpoint open.
+
 ## Build and test
 
 ```sh
@@ -70,6 +159,7 @@ make go-test-cover
 make typecheck
 make test-coverage
 make build
+make package
 make lint
 ```
 

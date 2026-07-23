@@ -11,9 +11,9 @@ messages.
 | `ADDR` | `:8080` | HTTP listen address |
 | `JOIN_BASE_URL` | `http://localhost:8080` | Public absolute HTTP(S) origin used in generated links and origin validation |
 
-`JOIN_BASE_URL` is normalized by removing a trailing slash and must not contain
-a query or fragment. Tokens expire after ten minutes. Room and token data is
-lost when the process restarts.
+`JOIN_BASE_URL` is normalized by removing a trailing slash and must be an
+HTTP(S) origin without credentials, path, query, or fragment. Tokens expire
+after ten minutes. Room and token data is lost when the process restarts.
 
 ## Run and test
 
@@ -86,12 +86,25 @@ behind TLS for non-local use and treat host tokens as bearer credentials.
 ## Docker
 
 ```sh
-docker build -t cowatch-server -f server/Dockerfile server
-docker run --rm -p 8080:8080 \
+docker build --platform linux/amd64 -t cowatch-server -f server/Dockerfile server
+docker run --rm --name cowatch -p 8080:8080 \
   -e ADDR=:8080 \
-  -e JOIN_BASE_URL=https://cowatch.example \
+  -e JOIN_BASE_URL=http://PUBLIC_IP:8080 \
   cowatch-server
 ```
+
+The image uses the Go version declared by the project, produces a stripped
+CGO-free Linux binary, and runs as the distroless `nonroot` user. It contains
+no room data or deployment URL; `JOIN_BASE_URL` is always supplied at runtime.
+
+The repository's master-branch workflow publishes amd64 images to
+`DOCKERHUB_USERNAME/cowatch-server` after all tests pass. Configure the GitHub
+Actions variable `DOCKERHUB_USERNAME` and secret `DOCKERHUB_TOKEN`. Tags are
+`latest` and `sha-<commit>`.
+
+For the raw-IP early test, forward TCP 8080 only for the duration of the test
+and use the same `http://PUBLIC_IP:8080` value when packaging the extension.
+This traffic is unencrypted; use HTTPS/WSS for any continuing deployment.
 
 ## Troubleshooting
 

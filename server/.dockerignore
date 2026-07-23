@@ -1,5 +1,7 @@
 bin/
+coverage
 coverage.out
-coverage.html
-*.log
-.git
+*.exe
+*.test
+README.md
+openapi.yaml
