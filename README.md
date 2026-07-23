@@ -99,7 +99,7 @@ and forward router TCP 8080 to that host's TCP 8080.
 Replace `USERNAME` and `PUBLIC_IP`:
 
 ```sh
-docker pull USERNAME/cowatch-server:latest
+docker pull kbabayev/cowatch-server:latest
 docker run -d \
   --name cowatch \
   --restart unless-stopped \
