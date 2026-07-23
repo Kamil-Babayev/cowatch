@@ -12,12 +12,14 @@ const (
 	ControlModeHostOnly = "host-only"
 )
 
+// PlaybackState is the latest server-authoritative playback snapshot.
 type PlaybackState struct {
 	CurrentTime float64
 	IsPlaying   bool
 	UpdatedAt   int64 // unix millis — when this state was true, not when it was read
 }
 
+// Room contains the ephemeral configuration and state for a watch party.
 type Room struct {
 	ID             string
 	VideoURL       string
@@ -27,15 +29,18 @@ type Room struct {
 	LastKnownState *PlaybackState
 }
 
+// RoomStore safely stores active rooms in memory.
 type RoomStore struct {
 	mu    sync.RWMutex
 	rooms map[string]*Room
 }
 
+// NewRoomStore creates an empty room store.
 func NewRoomStore() *RoomStore {
 	return &RoomStore{rooms: make(map[string]*Room)}
 }
 
+// Create adds a room with fresh room and host credentials.
 func (s *RoomStore) Create(videoURL, controlMode string) (*Room, error) {
 	id, err := idgen.RoomID()
 	if err != nil {
@@ -58,6 +63,7 @@ func (s *RoomStore) Create(videoURL, controlMode string) (*Room, error) {
 	return room, nil
 }
 
+// Get returns a room by ID.
 func (s *RoomStore) Get(id string) (*Room, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -65,6 +71,7 @@ func (s *RoomStore) Get(id string) (*Room, bool) {
 	return room, ok
 }
 
+// Delete removes a room by ID.
 func (s *RoomStore) Delete(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

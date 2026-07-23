@@ -26,6 +26,7 @@ pnpm-debug.log*
 
 # Coverage
 coverage/
+coverage.out
 
 # Cache
 .cache/

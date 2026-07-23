@@ -198,3 +198,12 @@ Three rounds of self-review, jury-style, until no further inconsistencies turned
 4. No further structural, UX, or logic inconsistencies found. Remaining items in §8 are deliberate v2 scope decisions, not bugs.
 
 **Verdict:** stable after Round 3 — no open inconsistencies in flow, UX, or logic for the v1 scope as defined.
+> **v1 implementation note (July 2026):** The Firefox 140 release scope is
+> complete through US-3.6. The final wire protocol adds server-authored
+> `session` and `roomClosed` messages; authoritative playback state always
+> contains `currentTime` and `isPlaying`. The extension packages a pinned
+> Jitsi IFrame API wrapper, persists tab session descriptors, and uses
+> content-side video sampling. Pull requests independently enforce 80% Go
+> statement coverage and 80% extension line coverage. See `epic3report.md`,
+> `server/README.md`, and `server/openapi.yaml` for the final contract.
+> Production hosting and AMO submission remain out of scope.

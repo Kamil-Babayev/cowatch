@@ -1,19 +1,31 @@
 import { connectToRoom, type RoomConnection } from './ws-client.ts';
-import type { Message, PresencePayload, PlaybackPayload, StateResponsePayload } from '../shared/messages.ts';
-import { shouldCorrectDrift, computeJoinSeekTarget } from '../shared/sync-math.ts';
+import type {
+  Message,
+  PresencePayload,
+  PlaybackPayload,
+  RoomClosedPayload,
+  SessionPayload,
+  StateResponsePayload,
+} from '../shared/messages.ts';
+import { computeJoinSeekTarget } from '../shared/sync-math.ts';
 import type { PlaybackEvent } from '../content/playback-events.ts';
-
-const TIME_SYNC_INTERVAL_MS = 5000;
-const DRIFT_THRESHOLD_SECONDS = 1.5;
 
 export interface RoomManagerCallbacks {
   /** A remote play/pause/seeked to apply to this tab's video element. */
   onRemotePlayback: (event: PlaybackEvent) => void;
-  /** US-2.8: seek to this position once, right after joining. */
-  onJoinSeek: (targetSeconds: number) => void;
+  onAuthoritativeState: (
+    state: PlaybackPayload,
+    source: 'join' | 'control-denied',
+  ) => void;
+  onTimeSync: (state: PlaybackPayload, timestamp: number) => void;
   /** US-1.9's rejection message reaching this tab. */
   onControlDenied: (reason: string) => void;
   onPresence: (payload: PresencePayload) => void;
+  onSession: (payload: SessionPayload) => void;
+  onRoomClosed: (reason: RoomClosedPayload['reason']) => void;
+  onConnectionState: (
+    state: 'connecting' | 'connected' | 'disconnected' | 'error',
+  ) => void;
 }
 
 interface Session {
@@ -21,18 +33,15 @@ interface Session {
   roomId: string;
   hostToken: string | undefined;
   isHost: boolean;
-  timeSyncTimer: ReturnType<typeof setInterval> | null;
-  // The most recent local currentTime/isPlaying this tab reported — used
-  // as the payload for the host's periodic timeSync heartbeat, so the
-  // heartbeat always reflects genuinely current state rather than a stale
-  // snapshot from whenever the room was first joined.
-  lastLocalState: { currentTime: number; isPlaying: boolean } | null;
+  controlMode: 'open' | 'host-only' | null;
+  resyncPending: boolean;
 }
 
 export interface SessionInfo {
   roomId: string;
   hostToken: string | undefined;
   isHost: boolean;
+  controlMode: 'open' | 'host-only' | null;
 }
 
 // No TS constructor parameter-property shorthand — see video-detector.ts's
@@ -48,18 +57,29 @@ export class RoomManager {
   ): void {
     this.disconnect(tabId); // idempotent — replaces any existing session for this tab
 
-    const isHost = Boolean(hostToken);
-    const connection = connectToRoom(roomId, hostToken, (msg) =>
-      this.handleMessage(tabId, msg, callbacks),
+    let connection: RoomConnection;
+    connection = connectToRoom(
+      roomId,
+      hostToken,
+      (msg) => this.handleMessage(tabId, msg, callbacks),
+      (state) => {
+        callbacks.onConnectionState(state);
+        if (state === 'disconnected') {
+          const current = this.sessions.get(tabId);
+          if (current?.connection === connection) {
+            this.sessions.delete(tabId);
+          }
+        }
+      },
     );
 
     const session: Session = {
       connection,
       roomId,
       hostToken,
-      isHost,
-      timeSyncTimer: null,
-      lastLocalState: null,
+      isHost: false,
+      controlMode: null,
+      resyncPending: false,
     };
     this.sessions.set(tabId, session);
 
@@ -69,23 +89,23 @@ export class RoomManager {
     connection.socket.addEventListener('open', () => {
       this.send(tabId, { type: 'stateRequest', timestamp: Date.now() });
     });
-
-    if (isHost) {
-      session.timeSyncTimer = setInterval(() => this.sendTimeSync(tabId), TIME_SYNC_INTERVAL_MS);
-    }
   }
 
   /** US-3.2: lets the message router look up a tab's roomId/hostToken for the fresh-link round trip. */
   getSession(tabId: number): SessionInfo | undefined {
     const session = this.sessions.get(tabId);
     if (!session) return undefined;
-    return { roomId: session.roomId, hostToken: session.hostToken, isHost: session.isHost };
+    return {
+      roomId: session.roomId,
+      hostToken: session.hostToken,
+      isHost: session.isHost,
+      controlMode: session.controlMode,
+    };
   }
 
   disconnect(tabId: number): void {
     const session = this.sessions.get(tabId);
     if (!session) return;
-    if (session.timeSyncTimer) clearInterval(session.timeSyncTimer);
     session.connection.close();
     this.sessions.delete(tabId);
   }
@@ -95,27 +115,35 @@ export class RoomManager {
     const session = this.sessions.get(tabId);
     if (!session) return;
 
-    session.lastLocalState = { currentTime: event.currentTime, isPlaying: event.isPlaying };
-
     const payload: PlaybackPayload = { currentTime: event.currentTime, isPlaying: event.isPlaying };
     this.send(tabId, { type: event.type, payload, timestamp: Date.now() });
   }
 
-  private sendTimeSync(tabId: number): void {
+  reportHeartbeat(tabId: number, state: PlaybackPayload): void {
     const session = this.sessions.get(tabId);
-    if (!session || !session.lastLocalState) return;
-    const payload: PlaybackPayload = session.lastLocalState;
-    this.send(tabId, { type: 'timeSync', payload, timestamp: Date.now() });
+    if (!session || !session.isHost) return;
+    this.send(tabId, { type: 'timeSync', payload: state, timestamp: Date.now() });
   }
 
   private send(tabId: number, msg: Partial<Message>): void {
     const session = this.sessions.get(tabId);
     if (!session) return;
+    if (session.connection.socket.readyState !== WebSocket.OPEN) return;
     session.connection.socket.send(JSON.stringify(msg));
   }
 
   private handleMessage(tabId: number, msg: Message, callbacks: RoomManagerCallbacks): void {
     switch (msg.type) {
+      case 'session': {
+        const payload = msg.payload as SessionPayload;
+        const session = this.sessions.get(tabId);
+        if (session) {
+          session.isHost = payload.isHost;
+          session.controlMode = payload.controlMode;
+        }
+        callbacks.onSession(payload);
+        return;
+      }
       case 'presence':
         callbacks.onPresence(msg.payload as PresencePayload);
         return;
@@ -123,30 +151,35 @@ export class RoomManager {
       case 'stateResponse': {
         const payload = msg.payload as StateResponsePayload;
         const target = computeJoinSeekTarget(payload.currentTime, payload.isPlaying, msg.timestamp);
-        callbacks.onJoinSeek(target);
+        const session = this.sessions.get(tabId);
+        const source = session?.resyncPending ? 'control-denied' : 'join';
+        if (session) session.resyncPending = false;
+        callbacks.onAuthoritativeState(
+          { currentTime: target, isPlaying: payload.isPlaying },
+          source,
+        );
         return;
       }
 
       case 'controlDenied': {
         const payload = msg.payload as { reason: string };
+        const session = this.sessions.get(tabId);
+        if (session) session.resyncPending = true;
         callbacks.onControlDenied(payload.reason);
+        this.send(tabId, { type: 'stateRequest', timestamp: Date.now() });
         return;
       }
 
       case 'timeSync': {
-        // US-2.7: this tab is a non-host receiving a heartbeat from
-        // whoever holds control. Only correct past the threshold — see
-        // shared/sync-math.ts for why.
-        const session = this.sessions.get(tabId);
         const payload = msg.payload as PlaybackPayload;
-        const localTime = session?.lastLocalState?.currentTime ?? payload.currentTime;
-        if (shouldCorrectDrift(localTime, payload.currentTime, DRIFT_THRESHOLD_SECONDS)) {
-          callbacks.onRemotePlayback({
-            type: payload.isPlaying ? 'seeked' : 'pause',
-            currentTime: payload.currentTime,
-            isPlaying: payload.isPlaying,
-          });
-        }
+        callbacks.onTimeSync(payload, msg.timestamp);
+        return;
+      }
+
+      case 'roomClosed': {
+        const payload = msg.payload as RoomClosedPayload;
+        callbacks.onRoomClosed(payload.reason);
+        this.disconnect(tabId);
         return;
       }
 

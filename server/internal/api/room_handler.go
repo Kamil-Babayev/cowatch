@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -25,32 +24,29 @@ type createRoomResponse struct {
 func handleCreateRoom(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createRoomRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		if err := decodeJSON(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON body"})
 			return
 		}
 		if !isValidVideoURL(req.VideoURL) {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "videoUrl must be a valid http(s) URL"})
 			return
 		}
-		if req.VideoURL == "" {
-			http.Error(w, "videoUrl is required", http.StatusBadRequest)
-			return
-		}
 		if req.ControlMode != store.ControlModeOpen && req.ControlMode != store.ControlModeHostOnly {
-			http.Error(w, "controlMode must be 'open' or 'host-only'", http.StatusBadRequest)
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "controlMode must be 'open' or 'host-only'"})
 			return
 		}
 
 		room, err := deps.Rooms.Create(req.VideoURL, req.ControlMode)
 		if err != nil {
-			http.Error(w, "failed to create room", http.StatusInternalServerError)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create room"})
 			return
 		}
 
 		token, err := deps.Tokens.Create(room.ID, joinTokenTTL)
 		if err != nil {
-			http.Error(w, "failed to create join token", http.StatusInternalServerError)
+			deps.Rooms.Delete(room.ID)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create join token"})
 			return
 		}
 
@@ -86,7 +82,7 @@ func handleMintToken(deps Deps) http.HandlerFunc {
 
 		token, err := deps.Tokens.Create(room.ID, joinTokenTTL)
 		if err != nil {
-			http.Error(w, "failed to create join token", http.StatusInternalServerError)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create join token"})
 			return
 		}
 

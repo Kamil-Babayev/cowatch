@@ -122,3 +122,14 @@ None of these break anything today — they're places where the code has moved p
 | G | Both docs | US-1.2 / US-1.5 / §5.1 | Never states what shape `joinUrl` actually takes | Should say explicitly: `joinUrl` points at the landing page (`/join-page/?token=...`), not the JSON resolve endpoint — the ambiguity here is arguably what let the `joinUrl` bug go unnoticed as long as it did |
 
 Recommend a small doc-sync pass (rows A/B/C/D/E/F/G) before starting Epic 2, since US-2.9 and US-3.4 specifically build on top of the very things that drifted.
+## v1 hardening addendum (July 2026)
+
+The server now treats room lifecycle and WebSocket authority as explicit
+protocol behavior. Each connection receives `session {connectionId,isHost,
+controlMode}`. Host departure removes the room and closes joiners with
+`roomClosed {reason:"host-left"}`; graceful shutdown uses
+`server-shutdown`. Playback payloads are validated, message sizes and
+deadlines are bounded, ping/pong liveness is enforced, JSON errors are
+consistent, public URLs are normalized, and token/rate-limit cleanup is
+bounded and idempotent. Integration tests cover the final protocol and the
+aggregate statement coverage gate is 80%.

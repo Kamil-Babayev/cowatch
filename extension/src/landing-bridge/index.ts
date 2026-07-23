@@ -15,7 +15,12 @@ console.log('[CoWatch] landing-bridge content script loaded');
 
 // US-2.10: proves the extension is installed just by existing — the page
 // listens for this and falls back to an install prompt if it never hears it.
-window.dispatchEvent(new CustomEvent('cowatch:extension-detected'));
+function announceExtension(): void {
+  window.dispatchEvent(new CustomEvent('cowatch:extension-detected'));
+}
+
+window.addEventListener('cowatch:extension-check', announceExtension);
+announceExtension();
 
 // US-2.11: the page dispatches this when the user clicks "continue" on a
 // resolved join link.

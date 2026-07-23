@@ -7,8 +7,8 @@
     "build": "node build.mjs",
     "dev": "concurrently \"node build.mjs --watch\" \"web-ext run --source-dir dist\"",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/**/*.test.ts",
-    "test:coverage": "node --experimental-strip-types --experimental-test-coverage --test src/**/*.test.ts"
+    "test": "node --experimental-strip-types --test src/**/*.test.ts ../server/static/join/app.test.mjs",
+    "test:coverage": "node --experimental-strip-types --experimental-test-coverage --test-coverage-lines=80 --test-coverage-include=src/**/*.ts --test-coverage-exclude=src/**/*.test.ts --test-coverage-exclude=src/**/*.d.ts --test src/**/*.test.ts ../server/static/join/app.test.mjs"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^120.0.0",

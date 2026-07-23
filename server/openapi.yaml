@@ -1,0 +1,225 @@
+openapi: 3.1.0
+info:
+  title: CoWatch server API
+  version: 1.0.0
+  description: |
+    HTTP endpoints for ephemeral CoWatch rooms. The WebSocket message catalog
+    is documented in server/README.md.
+externalDocs:
+  description: WebSocket protocol and server operations
+  url: ./README.md
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Check process health
+      responses:
+        "200":
+          description: Healthy
+  /rooms:
+    post:
+      operationId: createRoom
+      summary: Create an ephemeral room and its first join link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoomRequest"
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateRoomResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /join/{token}:
+    get:
+      operationId: resolveJoinToken
+      summary: Resolve a short-lived join token
+      parameters:
+        - $ref: "#/components/parameters/JoinToken"
+      responses:
+        "200":
+          description: Token resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveJoinResponse"
+        "404":
+          description: Unknown token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: Expired token or removed room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /rooms/{roomId}/tokens:
+    post:
+      operationId: mintJoinToken
+      summary: Issue another join link for an active room
+      security:
+        - hostBearer: []
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "201":
+          description: Token created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintTokenResponse"
+        "401":
+          description: Missing or invalid host token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /rooms/{roomId}/connect:
+    get:
+      operationId: connectRoom
+      summary: Upgrade to the room WebSocket
+      description: |
+        Set `Connection: Upgrade` and `Upgrade: websocket`. Hosts may provide
+        `hostToken` as a query parameter. On success the first server message
+        is `session`; see the linked WebSocket catalog.
+      externalDocs:
+        description: WebSocket message catalog
+        url: ./README.md#websocket-protocol
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+        - name: hostToken
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switching Protocols
+        "404":
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /join-page/:
+    get:
+      operationId: joinPage
+      summary: Serve the extension handoff page
+      responses:
+        "200":
+          description: HTML landing page
+          content:
+            text/html:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    hostBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-host-token
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema:
+        type: string
+    JoinToken:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid JSON or input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Room creation rate exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    CreateRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [videoUrl, controlMode]
+      properties:
+        videoUrl:
+          type: string
+          format: uri
+        controlMode:
+          type: string
+          enum: [open, host-only]
+    CreateRoomResponse:
+      type: object
+      required: [roomId, joinToken, joinUrl, hostToken]
+      properties:
+        roomId:
+          type: string
+        joinToken:
+          type: string
+        joinUrl:
+          type: string
+          format: uri
+        hostToken:
+          type: string
+    ResolveJoinResponse:
+      type: object
+      required: [roomId, videoUrl]
+      properties:
+        roomId:
+          type: string
+        videoUrl:
+          type: string
+          format: uri
+    MintTokenResponse:
+      type: object
+      required: [joinToken, joinUrl]
+      properties:
+        joinToken:
+          type: string
+        joinUrl:
+          type: string
+          format: uri
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string

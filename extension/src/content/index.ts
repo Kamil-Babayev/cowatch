@@ -2,8 +2,15 @@ import { VideoDetector } from './video-detector.ts';
 import { attachPlaybackListeners, type PlaybackEvent } from './playback-events.ts';
 import { injectJitsi, type JitsiHandle } from './jitsi.ts';
 import { setupFullscreenReparenting } from './overlay-fullscreen.ts';
+import {
+  applyPlaybackState,
+  correctionForHeartbeat,
+  correctedPlaybackState,
+} from './playback-sync.ts';
+import { formatRoomStatus } from './overlay-state.ts';
 import overlayStyles from './overlay.css';
 import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
+import type { PlaybackPayload, SessionPayload } from '../shared/messages.ts';
 
 console.log('[CoWatch] content script loaded on', window.location.href);
 
@@ -11,6 +18,12 @@ let detachPlaybackListeners: (() => void) | null = null;
 let jitsiHandle: JitsiHandle | null = null;
 let jitsiInjecting = false; // guards against double-injection if roomConnected somehow fires twice
 let applyingRemoteEvent = false; // feedback-loop guard — see onLocalPlaybackEvent
+let remoteApplyGeneration = 0;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let sessionInfo: SessionPayload | null = null;
+let participantCount = 0;
+let currentRoomId: string | null = null;
+let selectorMarkers: HTMLElement[] = [];
 
 const detector = new VideoDetector(document);
 
@@ -33,18 +46,16 @@ function attachToVideo(video: HTMLVideoElement | null): void {
 detector.onChange(attachToVideo);
 attachToVideo(detector.getCurrent());
 
-function handleRemoteEvent(event: PlaybackEvent): void {
+async function handleRemoteState(state: PlaybackPayload): Promise<void> {
   const video = detector.getCurrent();
   if (!video) return;
 
+  const generation = ++remoteApplyGeneration;
   applyingRemoteEvent = true;
   try {
-    video.currentTime = event.currentTime;
-    if (event.isPlaying && video.paused) {
-      void video.play();
-    } else if (!event.isPlaying && !video.paused) {
-      video.pause();
-    }
+    await applyPlaybackState(video, state);
+  } catch {
+    setTransientMessage('Playback was blocked — press play once on this page');
   } finally {
     // Cleared on a delay, not synchronously: setting currentTime and
     // calling play()/pause() fires this tab's own play/pause/seeked
@@ -52,9 +63,35 @@ function handleRemoteEvent(event: PlaybackEvent): void {
     // clearing the flag too early would let those synthetic events slip
     // past the guard in onLocalPlaybackEvent.
     setTimeout(() => {
-      applyingRemoteEvent = false;
+      if (generation === remoteApplyGeneration) applyingRemoteEvent = false;
     }, 0);
   }
+}
+
+function handleRemoteEvent(event: PlaybackEvent): void {
+  void handleRemoteState({
+    currentTime: event.currentTime,
+    isPlaying: event.isPlaying,
+  });
+}
+
+function sendHeartbeat(): void {
+  if (!sessionInfo?.isHost) return;
+  const video = detector.getCurrent();
+  if (!video) return;
+  const msg: ToBackgroundMessage = {
+    kind: 'playbackHeartbeat',
+    state: { currentTime: video.currentTime, isPlaying: !video.paused },
+  };
+  void browser.runtime.sendMessage(msg);
+}
+
+function restartHeartbeat(): void {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  if (!sessionInfo?.isHost) return;
+  sendHeartbeat();
+  heartbeatTimer = setInterval(sendHeartbeat, 5000);
 }
 
 // --- US-3.2: in-page overlay -----------------------------------------
@@ -70,7 +107,10 @@ interface Overlay {
   cameraBtn: HTMLButtonElement;
   copyLinkBtn: HTMLButtonElement;
   leaveBtn: HTMLButtonElement;
-  statusEl: HTMLElement;
+  selectVideoBtn: HTMLButtonElement;
+  persistentStatusEl: HTMLElement;
+  transientStatusEl: HTMLElement;
+  selectorEl: HTMLElement;
   stopFullscreenReparenting: () => void;
 }
 
@@ -123,12 +163,26 @@ function createOverlay(): Overlay {
     teardownOverlay();
   });
 
-  const statusEl = document.createElement('div');
-  statusEl.className = 'cowatch-status'; // US-3.4 renders "who has control" / controlDenied here
+  const selectVideoBtn = document.createElement('button');
+  selectVideoBtn.className = 'cowatch-btn';
+  selectVideoBtn.textContent = 'Select Video';
+  selectVideoBtn.addEventListener('click', showVideoSelector);
 
-  controls.append(micBtn, cameraBtn, copyLinkBtn, leaveBtn);
-  bar.append(jitsiSlot, controls, statusEl);
-  shadowRoot.appendChild(bar);
+  const persistentStatusEl = document.createElement('div');
+  persistentStatusEl.className = 'cowatch-status cowatch-status-persistent';
+
+  const transientStatusEl = document.createElement('div');
+  transientStatusEl.className = 'cowatch-status cowatch-status-transient';
+  transientStatusEl.setAttribute('role', 'status');
+  transientStatusEl.setAttribute('aria-live', 'polite');
+
+  const selectorEl = document.createElement('div');
+  selectorEl.className = 'cowatch-selector';
+  selectorEl.hidden = true;
+
+  controls.append(micBtn, cameraBtn, selectVideoBtn, copyLinkBtn, leaveBtn);
+  bar.append(jitsiSlot, controls, persistentStatusEl, transientStatusEl);
+  shadowRoot.append(bar, selectorEl);
 
   // US-3.3: keeps the bar visible when the page (or the video itself)
   // goes fullscreen — anything not inside the fullscreen element stops
@@ -136,38 +190,179 @@ function createOverlay(): Overlay {
   // this way regardless of z-index.
   const stopFullscreenReparenting = setupFullscreenReparenting(host, document.body);
 
-  return { hostEl: host, jitsiSlot, micBtn, cameraBtn, copyLinkBtn, leaveBtn, statusEl, stopFullscreenReparenting };
+  return {
+    hostEl: host,
+    jitsiSlot,
+    micBtn,
+    cameraBtn,
+    copyLinkBtn,
+    leaveBtn,
+    selectVideoBtn,
+    persistentStatusEl,
+    transientStatusEl,
+    selectorEl,
+    stopFullscreenReparenting,
+  };
 }
 
 function teardownOverlay(): void {
+  clearSelectorMarkers();
   jitsiHandle?.dispose();
   jitsiHandle = null;
   overlay?.stopFullscreenReparenting();
   overlay?.hostEl.remove();
   overlay = null;
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  sessionInfo = null;
+  currentRoomId = null;
 }
 
-function setStatusMessage(message: string, durationMs = 3000): void {
+function clearSelectorMarkers(): void {
+  selectorMarkers.forEach((marker) => marker.remove());
+  selectorMarkers = [];
+}
+
+function addSelectorMarker(video: HTMLVideoElement, index: number): void {
+  const rect = video.getBoundingClientRect();
+  const marker = document.createElement('div');
+  marker.textContent = String(index + 1);
+  marker.setAttribute('aria-hidden', 'true');
+  Object.assign(marker.style, {
+    position: 'fixed',
+    left: `${Math.max(0, rect.left)}px`,
+    top: `${Math.max(0, rect.top)}px`,
+    width: `${Math.max(0, rect.width)}px`,
+    height: `${Math.max(0, rect.height)}px`,
+    boxSizing: 'border-box',
+    border: '3px solid #f2a93b',
+    color: '#171717',
+    background: 'rgba(242, 169, 59, 0.9)',
+    font: '700 16px/28px monospace',
+    padding: '0 8px',
+    pointerEvents: 'none',
+    zIndex: '2147483646',
+  });
+  document.documentElement.appendChild(marker);
+  selectorMarkers.push(marker);
+}
+
+function setTransientMessage(message: string, durationMs = 3000): void {
   if (!overlay) return;
-  overlay.statusEl.textContent = message;
+  overlay.transientStatusEl.textContent = message;
   setTimeout(() => {
     // Only clear if nothing newer has overwritten it in the meantime.
-    if (overlay?.statusEl.textContent === message) overlay.statusEl.textContent = '';
+    if (overlay?.transientStatusEl.textContent === message) {
+      overlay.transientStatusEl.textContent = '';
+    }
   }, durationMs);
 }
 
+function renderPersistentStatus(): void {
+  if (!overlay) return;
+  overlay.persistentStatusEl.textContent = formatRoomStatus(participantCount, sessionInfo);
+  overlay.copyLinkBtn.hidden = sessionInfo?.isHost === false;
+}
+
+function showVideoSelector(): void {
+  if (!overlay) return;
+  const candidates = detector.listCandidates();
+  clearSelectorMarkers();
+  overlay.selectorEl.replaceChildren();
+  const title = document.createElement('strong');
+  title.textContent = candidates.length ? 'Choose the video to synchronize' : 'No videos found';
+  overlay.selectorEl.appendChild(title);
+  candidates.forEach((video, index) => {
+    addSelectorMarker(video, index);
+    const rect = video.getBoundingClientRect();
+    const button = document.createElement('button');
+    button.className = 'cowatch-btn';
+    button.textContent = `${index + 1} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
+    button.addEventListener('click', () => {
+      detector.selectOverride(video);
+      clearSelectorMarkers();
+      overlay!.selectorEl.hidden = true;
+      setTransientMessage(`Video ${index + 1} selected`);
+    });
+    overlay!.selectorEl.appendChild(button);
+  });
+  const auto = document.createElement('button');
+  auto.className = 'cowatch-btn';
+  auto.textContent = 'Use automatic selection';
+  auto.addEventListener('click', () => {
+    detector.clearOverride();
+    clearSelectorMarkers();
+    overlay!.selectorEl.hidden = true;
+    setTransientMessage('Automatic video selection restored');
+  });
+  overlay.selectorEl.appendChild(auto);
+  overlay.selectorEl.hidden = false;
+}
+
+function startJitsi(roomId: string): void {
+  if (!overlay || jitsiInjecting || jitsiHandle) return;
+  jitsiInjecting = true;
+  overlay.jitsiSlot.textContent = 'Connecting video chat…';
+  injectJitsi(roomId, overlay.jitsiSlot)
+    .then((handle) => {
+      jitsiHandle = handle;
+      if (!overlay) return;
+      overlay.micBtn.disabled = false;
+      overlay.cameraBtn.disabled = false;
+      overlay.micBtn.addEventListener('click', () => handle.toggleAudio());
+      overlay.cameraBtn.addEventListener('click', () => handle.toggleVideo());
+    })
+    .catch((err) => {
+      console.error('[CoWatch] Jitsi injection failed:', err);
+      if (!overlay) return;
+      overlay.jitsiSlot.replaceChildren();
+      const message = document.createElement('span');
+      message.textContent = 'Video chat unavailable';
+      const retry = document.createElement('button');
+      retry.className = 'cowatch-btn';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => startJitsi(roomId));
+      overlay.jitsiSlot.append(message, retry);
+    })
+    .finally(() => {
+      jitsiInjecting = false;
+    });
+}
+
 browser.runtime.onMessage.addListener((message: unknown) => {
+  if ((message as { kind?: string }).kind === 'videoStatusRequest') {
+    return Promise.resolve({
+      hasVideo: detector.getCurrent() !== null,
+      candidateCount: detector.listCandidates().length,
+    });
+  }
   const msg = message as ToContentMessage;
   switch (msg.kind) {
     case 'remotePlaybackEvent':
       handleRemoteEvent(msg.event);
       return;
 
-    case 'joinSeek': {
-      // US-2.8: a one-time correction right after joining, distinct from
-      // the ongoing remotePlaybackEvent stream.
+    case 'authoritativeState': {
+      void handleRemoteState({
+        currentTime: msg.currentTime,
+        isPlaying: msg.isPlaying,
+      }).then(() => {
+        if (msg.source === 'control-denied' && overlay) {
+          overlay.transientStatusEl.textContent = '';
+        }
+      });
+      return;
+    }
+
+    case 'timeSync': {
       const video = detector.getCurrent();
-      if (video) video.currentTime = msg.targetSeconds;
+      if (!video) return;
+      const correction = correctionForHeartbeat(
+        video.currentTime,
+        msg.state,
+        msg.timestamp,
+      );
+      if (correction) void handleRemoteState(correction);
       return;
     }
 
@@ -175,11 +370,42 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       // US-3.4 adds the local re-sync fix + a proper persistent
       // indicator; for now, at least visible in the overlay rather than
       // console-only.
-      setStatusMessage(`Denied: ${msg.reason}`);
+      if (overlay) {
+        overlay.transientStatusEl.textContent =
+          'Host controls playback — resyncing…';
+      }
       return;
 
     case 'presenceUpdate':
-      console.log('[CoWatch] presence:', msg.payload.connections);
+      participantCount = msg.payload.connections.length;
+      renderPersistentStatus();
+      return;
+
+    case 'sessionInfo':
+      sessionInfo = msg.payload;
+      restartHeartbeat();
+      renderPersistentStatus();
+      if (detector.listCandidates().length > 1) {
+        setTransientMessage('Multiple videos found — use Select Video if sync is wrong', 6000);
+      }
+      return;
+
+    case 'connectionState':
+      if (msg.state === 'error' || msg.state === 'disconnected') {
+        setTransientMessage(
+          msg.state === 'error' ? 'Room connection failed' : 'Room disconnected',
+          10_000,
+        );
+      }
+      return;
+
+    case 'roomClosed':
+      setTransientMessage(
+        msg.reason === 'host-left' ? 'The host ended this room' : 'The server closed this room',
+        10_000,
+      );
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
       return;
 
     case 'roomConnected':
@@ -187,37 +413,22 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       // path — see runtime-messages.ts for why content/index.ts can't
       // determine its own roomId any other way.
       if (!jitsiHandle && !jitsiInjecting) {
-        jitsiInjecting = true;
+        currentRoomId = msg.roomId;
         overlay = createOverlay();
-        injectJitsi(msg.roomId, overlay.jitsiSlot)
-          .then((handle) => {
-            jitsiHandle = handle;
-            if (overlay) {
-              overlay.micBtn.disabled = false;
-              overlay.cameraBtn.disabled = false;
-              overlay.micBtn.addEventListener('click', () => handle.toggleAudio());
-              overlay.cameraBtn.addEventListener('click', () => handle.toggleVideo());
-            }
-          })
-          .catch((err) => {
-            console.error('[CoWatch] Jitsi injection failed:', err);
-            setStatusMessage('Video chat unavailable', 10_000);
-          })
-          .finally(() => {
-            jitsiInjecting = false;
-          });
+        renderPersistentStatus();
+        startJitsi(msg.roomId);
       }
       return;
 
     case 'freshLinkResult':
       navigator.clipboard
         .writeText(msg.joinUrl)
-        .then(() => setStatusMessage('Link copied'))
-        .catch(() => setStatusMessage('Copied, but clipboard write failed'));
+        .then(() => setTransientMessage('Link copied'))
+        .catch(() => setTransientMessage('Link generated, but clipboard access failed'));
       return;
 
     case 'freshLinkError':
-      setStatusMessage(msg.message);
+      setTransientMessage(msg.message);
       return;
   }
 });
@@ -226,11 +437,4 @@ browser.runtime.onMessage.addListener((message: unknown) => {
 // navigated here as part of a join handoff (see message-router.ts for why
 // this has to be a round-trip rather than something this script can
 // determine on its own).
-browser.runtime.onMessage.addListener((message: unknown) => {
-  const msg = message as ToContentMessage;
-  if (msg.kind === 'pendingJoinResult' && msg.roomId) {
-    const connectMsg: ToBackgroundMessage = { kind: 'connectRoom', roomId: msg.roomId };
-    browser.runtime.sendMessage(connectMsg);
-  }
-});
 browser.runtime.sendMessage({ kind: 'checkPendingJoin' } satisfies ToBackgroundMessage);

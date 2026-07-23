@@ -1,9 +1,11 @@
 import type { PlaybackEvent } from '../content/playback-events.ts';
 import type { PresencePayload } from './messages.ts';
+import type { PlaybackPayload, SessionPayload } from './messages.ts';
 
 /** Content script -> background */
 export type ToBackgroundMessage =
   | { kind: 'localPlaybackEvent'; event: PlaybackEvent }
+  | { kind: 'playbackHeartbeat'; state: PlaybackPayload }
   // US-2.11: landing-bridge content script telling background the user
   // clicked "continue" on a resolved join link.
   | { kind: 'joinRequested'; roomId: string; videoUrl: string }
@@ -28,9 +30,18 @@ export type ToBackgroundMessage =
 /** Background -> content script (for a specific tab) */
 export type ToContentMessage =
   | { kind: 'remotePlaybackEvent'; event: PlaybackEvent }
-  | { kind: 'joinSeek'; targetSeconds: number }
+  | {
+      kind: 'authoritativeState';
+      currentTime: number;
+      isPlaying: boolean;
+      source: 'join' | 'control-denied';
+    }
+  | { kind: 'timeSync'; state: PlaybackPayload; timestamp: number }
   | { kind: 'controlDenied'; reason: string }
   | { kind: 'presenceUpdate'; payload: PresencePayload }
+  | { kind: 'sessionInfo'; payload: SessionPayload }
+  | { kind: 'connectionState'; state: 'connecting' | 'connected' | 'disconnected' | 'error' }
+  | { kind: 'roomClosed'; reason: 'host-left' | 'server-shutdown' }
   | { kind: 'extensionInstalledResponse' } // reply to extensionInstalledCheck
   | { kind: 'pendingJoinResult'; roomId: string | null } // reply to checkPendingJoin
   // Sent right after connectRoom succeeds, on BOTH the host path (popup ->

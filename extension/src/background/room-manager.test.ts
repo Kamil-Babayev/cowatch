@@ -11,23 +11,30 @@ let serverReceived: unknown[] = [];
 
 function makeCallbacks(): RoomManagerCallbacks & {
   remoteEvents: unknown[];
-  joinSeeks: number[];
+  authoritativeStates: unknown[];
+  timeSyncs: unknown[];
   denials: string[];
   presences: unknown[];
 } {
   const remoteEvents: unknown[] = [];
-  const joinSeeks: number[] = [];
+  const authoritativeStates: unknown[] = [];
+  const timeSyncs: unknown[] = [];
   const denials: string[] = [];
   const presences: unknown[] = [];
   return {
     remoteEvents,
-    joinSeeks,
+    authoritativeStates,
+    timeSyncs,
     denials,
     presences,
     onRemotePlayback: (e) => remoteEvents.push(e),
-    onJoinSeek: (t) => joinSeeks.push(t),
+    onAuthoritativeState: (state, source) => authoritativeStates.push({ state, source }),
+    onTimeSync: (state, timestamp) => timeSyncs.push({ state, timestamp }),
     onControlDenied: (r) => denials.push(r),
     onPresence: (p) => presences.push(p),
+    onSession: () => undefined,
+    onRoomClosed: () => undefined,
+    onConnectionState: () => undefined,
   };
 }
 
@@ -49,6 +56,7 @@ before(async () => {
 });
 
 after(async () => {
+  for (const socket of wss.clients) socket.terminate();
   await new Promise<void>((resolve) => wss.close(() => resolve()));
 });
 
@@ -59,6 +67,15 @@ beforeEach(() => {
 
 function lastServerSocket(): WSConnection {
   return serverSockets[serverSockets.length - 1];
+}
+
+async function waitForServerSocket(): Promise<WSConnection> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const socket = lastServerSocket();
+    if (socket) return socket;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('timed out waiting for test WebSocket connection');
 }
 
 test('reportLocalEvent sends a correctly-shaped message to the server', async () => {
@@ -83,7 +100,7 @@ test('a remote play message triggers onRemotePlayback with the right shape', asy
   manager.connect(2, 'room-2', undefined, cb);
   await new Promise((r) => setTimeout(r, 50));
 
-  lastServerSocket().send(
+  (await waitForServerSocket()).send(
     JSON.stringify({ type: 'play', payload: { currentTime: 5, isPlaying: true }, timestamp: Date.now() }),
   );
   await new Promise((r) => setTimeout(r, 50));
@@ -94,14 +111,14 @@ test('a remote play message triggers onRemotePlayback with the right shape', asy
   manager.disconnect(2);
 });
 
-test('stateResponse triggers onJoinSeek with the elapsed-time-corrected target', async () => {
+test('stateResponse preserves playing state with the elapsed-time-corrected target', async () => {
   const manager = new RoomManager();
   const cb = makeCallbacks();
   manager.connect(3, 'room-3', undefined, cb);
   await new Promise((r) => setTimeout(r, 50));
 
   const stateTimestamp = Date.now() - 3000; // "3 seconds ago"
-  lastServerSocket().send(
+  (await waitForServerSocket()).send(
     JSON.stringify({
       type: 'stateResponse',
       payload: { currentTime: 100, isPlaying: true },
@@ -110,9 +127,15 @@ test('stateResponse triggers onJoinSeek with the elapsed-time-corrected target',
   );
   await new Promise((r) => setTimeout(r, 50));
 
-  assert.equal(cb.joinSeeks.length, 1);
+  assert.equal(cb.authoritativeStates.length, 1);
   // ~103 seconds — allow slack for test-runner scheduling jitter
-  assert.ok(cb.joinSeeks[0] >= 102.9 && cb.joinSeeks[0] <= 103.5, `got ${cb.joinSeeks[0]}`);
+  const result = cb.authoritativeStates[0] as {
+    state: { currentTime: number; isPlaying: boolean };
+    source: string;
+  };
+  assert.ok(result.state.currentTime >= 102.9 && result.state.currentTime <= 103.5);
+  assert.equal(result.state.isPlaying, true);
+  assert.equal(result.source, 'join');
 
   manager.disconnect(3);
 });
@@ -123,16 +146,17 @@ test('controlDenied reaches the callback with its reason', async () => {
   manager.connect(4, 'room-4', undefined, cb);
   await new Promise((r) => setTimeout(r, 50));
 
-  lastServerSocket().send(
+  (await waitForServerSocket()).send(
     JSON.stringify({ type: 'controlDenied', payload: { reason: 'host-only room' }, timestamp: Date.now() }),
   );
   await new Promise((r) => setTimeout(r, 50));
 
   assert.deepEqual(cb.denials, ['host-only room']);
+  assert.ok(serverReceived.some((m) => (m as { type: string }).type === 'stateRequest'));
   manager.disconnect(4);
 });
 
-test('timeSync within threshold does not trigger a correction', async () => {
+test('timeSync is forwarded with its timestamp for content-side drift comparison', async () => {
   const manager = new RoomManager();
   const cb = makeCallbacks();
   manager.connect(5, 'room-5', undefined, cb);
@@ -141,31 +165,32 @@ test('timeSync within threshold does not trigger a correction', async () => {
   manager.reportLocalEvent(5, { type: 'play', currentTime: 100, isPlaying: true });
   await new Promise((r) => setTimeout(r, 20));
 
-  lastServerSocket().send(
+  (await waitForServerSocket()).send(
     JSON.stringify({ type: 'timeSync', payload: { currentTime: 100.5, isPlaying: true }, timestamp: Date.now() }),
   );
   await new Promise((r) => setTimeout(r, 50));
 
-  assert.equal(cb.remoteEvents.length, 0);
+  assert.equal(cb.timeSyncs.length, 1);
   manager.disconnect(5);
 });
 
-test('timeSync past the threshold triggers a correction', async () => {
+test('server session controls host heartbeat authority', async () => {
   const manager = new RoomManager();
   const cb = makeCallbacks();
   manager.connect(6, 'room-6', undefined, cb);
   await new Promise((r) => setTimeout(r, 50));
 
-  manager.reportLocalEvent(6, { type: 'play', currentTime: 100, isPlaying: true });
-  await new Promise((r) => setTimeout(r, 20));
-
-  lastServerSocket().send(
-    JSON.stringify({ type: 'timeSync', payload: { currentTime: 104, isPlaying: true }, timestamp: Date.now() }),
+  (await waitForServerSocket()).send(
+    JSON.stringify({
+      type: 'session',
+      payload: { connectionId: 'host', isHost: true, controlMode: 'open' },
+      timestamp: Date.now(),
+    }),
   );
   await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(cb.remoteEvents.length, 1);
-  assert.equal((cb.remoteEvents[0] as { currentTime: number }).currentTime, 104);
+  manager.reportHeartbeat(6, { currentTime: 104, isPlaying: true });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(serverReceived.some((m) => (m as { type: string }).type === 'timeSync'));
   manager.disconnect(6);
 });
 

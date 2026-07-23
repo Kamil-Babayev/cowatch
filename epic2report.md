@@ -115,3 +115,13 @@ Cannot be verified in this sandbox at all — no network path to `meet.jit.si`, 
 | D | Neither doc | — | Never specifies where `hostToken`/session state lives client-side | Implemented as `browser.storage.session`, keyed by tab ID — a real decision that should be written down somewhere before Epic 3 builds on top of the assumption |
 
 Recommend syncing rows A–D into the docs before starting Epic 3, same as Epic 1's report recommended for its own drift — US-3.2 and US-3.4 specifically build on the exact mechanisms in row A and D.
+## v1 integration addendum (July 2026)
+
+The extension no longer infers host authority or drift from stale background
+state. It consumes the server `session` frame, samples the selected video in
+the content script, applies full authoritative `{currentTime,isPlaying}`
+snapshots safely, restores session descriptors from `storage.session`, and
+clears them on room closure. Landing detection uses a request/response event
+handshake. The Jitsi IFrame API wrapper is packaged locally with its checksum
+and license while the meeting domain is build-time configurable. Firefox 140
+and the required data-transmission declarations are now part of the manifest.

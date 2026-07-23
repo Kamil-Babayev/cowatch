@@ -38,6 +38,13 @@
   border-radius: 4px;
   overflow: hidden;
   background: #0f0d09;
+  color: #9c9585;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  text-align: center;
 }
 
 .cowatch-jitsi-slot iframe {
@@ -70,6 +77,11 @@
   border-color: #e8a33d;
 }
 
+.cowatch-btn:focus-visible {
+  outline: 2px solid #e8a33d;
+  outline-offset: 2px;
+}
+
 .cowatch-btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
@@ -96,4 +108,53 @@
 
 .cowatch-status:empty {
   display: none;
+}
+
+.cowatch-status-persistent {
+  color: #f1ecdf;
+}
+
+.cowatch-status-transient {
+  color: #e8a33d;
+}
+
+.cowatch-selector {
+  margin-top: 6px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgb(23 20 15 / 96%);
+  border: 1px solid #5c4420;
+  border-radius: 8px;
+  color: #f1ecdf;
+  font-size: 10px;
+}
+
+.cowatch-selector[hidden],
+.cowatch-btn[hidden] {
+  display: none;
+}
+
+@media (max-width: 620px) {
+  .cowatch-bar {
+    max-width: calc(100vw - 20px);
+    flex-wrap: wrap;
+  }
+
+  .cowatch-jitsi-slot {
+    width: 160px;
+    height: 90px;
+  }
+
+  .cowatch-controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
 }

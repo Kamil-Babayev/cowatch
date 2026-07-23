@@ -1,0 +1,60 @@
+name: Pull request checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Go server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Download modules
+        run: go mod download
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Race tests
+        run: go test -race ./...
+      - name: Coverage
+        run: |
+          go test -coverprofile=coverage.out ./...
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')"
+          awk -v total="$total" 'BEGIN { if (total + 0 < 80) { printf "Go coverage %.1f%% is below 80%%\n", total; exit 1 } }'
+
+  extension:
+    name: Firefox extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npx web-ext lint --source-dir dist

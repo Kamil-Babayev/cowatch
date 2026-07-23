@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CoWatch</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
@@ -11,7 +12,9 @@
       <span class="wordmark">COWATCH</span>
     </div>
 
-    <div id="create-view">
+    <div id="loading-view" role="status">Checking this tab…</div>
+
+    <div id="create-view" hidden>
       <p id="no-video-message" hidden>No video detected on this page.</p>
       <label>
         <span class="field-label">Control</span>
@@ -31,7 +34,7 @@
       <button id="leave-room-btn">Leave Room</button>
     </div>
 
-    <p id="status"></p>
+    <p id="status" role="status" aria-live="polite"></p>
 
     <script src="index.js"></script>
   </body>

@@ -4,7 +4,13 @@
   "version": "0.1.0",
   "description": "Sync video playback with friends on any site, plus video/voice chat.",
   "browser_specific_settings": {
-    "gecko": { "id": "cowatch@yourdomain.dev" }
+    "gecko": {
+      "id": "cowatch@yourdomain.dev",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["websiteActivity", "personalCommunications"]
+      }
+    }
   },
   "background": {
     "scripts": ["background/index.js"]
@@ -13,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content/index.js"]
+      "js": ["vendor/jitsi-external-api.js", "content/index.js"]
     },
     {
       "matches": [

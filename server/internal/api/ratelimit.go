@@ -28,11 +28,22 @@ func (rl *rateLimiter) allow(ip string) bool {
 			kept = append(kept, t)
 		}
 	}
+	if len(kept) == 0 {
+		delete(rl.requests, ip)
+	}
 	if len(kept) >= rl.limit {
 		rl.requests[ip] = kept
 		return false
 	}
 	rl.requests[ip] = append(kept, time.Now())
+	// Opportunistically keep the map bounded without another goroutine.
+	if len(rl.requests) > 1024 {
+		for key, entries := range rl.requests {
+			if len(entries) == 0 || entries[len(entries)-1].Before(cutoff) {
+				delete(rl.requests, key)
+			}
+		}
+	}
 	return true
 }
 

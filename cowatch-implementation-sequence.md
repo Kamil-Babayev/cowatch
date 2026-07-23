@@ -232,3 +232,23 @@ Epic 3 was originally planned before Epic 1 or 2 existed. Two of Round 2's own f
 4. Re-confirmed US-3.1, US-3.3, US-3.5, and the "select the video" half of US-3.4 all still hold up exactly as originally planned — the exact DOM they style/wrap was checked directly against the real HTML/TS from Epic 2, not assumed.
 
 **Verdict:** Epic 3 revised and re-stabilized against the real Epic 2 codebase. The lesson worth keeping for Epic 4 or any future epic: a round that "confirms no issue" against a plan for work that hasn't been built yet should be re-checked once that work actually exists, not treated as settled.
+## v1 completion status (July 2026)
+
+US-3.4, US-3.5, and US-3.6 are implemented. The final pass also closes
+cross-epic defects that the original sequence could not anticipate:
+
+- authority now comes from a server-authored `session` message rather than
+  possession of a token in extension state;
+- playback snapshots always carry both corrected time and play/pause state;
+- host-only denial requests and reapplies authoritative state;
+- actual video time is sampled in the content script for immediate and
+  five-second host heartbeats;
+- video selection, persistent presence/control status, room closure, Jitsi
+  retry, accessible landing states, and event-page session restoration are
+  included in the completed UI;
+- host departure closes the room, and graceful shutdown sends
+  `roomClosed` with `server-shutdown`;
+- Firefox 140, local Jitsi wrapper packaging, separate 80% coverage gates,
+  OpenAPI, privacy documentation, and PR checks are release requirements.
+
+Production deployment and AMO submission remain a later release activity.

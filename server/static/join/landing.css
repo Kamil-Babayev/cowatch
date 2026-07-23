@@ -87,7 +87,8 @@ body {
 #state-valid,
 #state-expired,
 #state-not-found,
-#state-no-extension {
+#state-no-extension,
+#state-error {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -150,6 +151,17 @@ button,
   display: inline-block;
 }
 
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 #continue-btn {
   background: var(--amber);
   color: var(--ink);
@@ -166,6 +178,18 @@ button,
   margin: 0;
   color: var(--rust);
   font-size: 14px;
+}
+
+#state-error p {
+  margin: 0;
+  color: var(--rust);
+}
+
+#retry-btn {
+  background: transparent;
+  color: var(--amber);
+  border: 1px solid var(--amber-deep);
+  padding: 10px 22px;
 }
 
 #state-no-extension p {
@@ -188,4 +212,21 @@ button,
 
 #state-no-extension a:hover {
   background: #f0b45c;
+}
+
+@media (max-width: 480px) {
+  body {
+    align-items: flex-start;
+    padding: 20px 14px;
+  }
+
+  .card {
+    padding: 24px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #state-loading::before {
+    animation: none;
+  }
 }

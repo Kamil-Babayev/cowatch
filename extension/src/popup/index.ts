@@ -1,5 +1,6 @@
 import { createRoom, mintFreshLink, type ControlMode } from '../shared/api-client.ts';
 import type { ToBackgroundMessage } from '../shared/runtime-messages.ts';
+import { detectPopupVideoStatus } from './video-status.ts';
 
 console.log('[CoWatch] popup loaded');
 
@@ -22,6 +23,7 @@ async function getActiveTab(): Promise<browser.tabs.Tab> {
 }
 
 function showCreateView(noVideo: boolean): void {
+  document.getElementById('loading-view')!.hidden = true;
   document.getElementById('create-view')!.hidden = false;
   document.getElementById('room-view')!.hidden = true;
   document.getElementById('no-video-message')!.hidden = !noVideo;
@@ -29,6 +31,7 @@ function showCreateView(noVideo: boolean): void {
 }
 
 function showRoomView(joinUrl: string): void {
+  document.getElementById('loading-view')!.hidden = true;
   document.getElementById('create-view')!.hidden = true;
   document.getElementById('room-view')!.hidden = false;
   (document.getElementById('join-url') as HTMLInputElement).value = joinUrl;
@@ -36,6 +39,13 @@ function showRoomView(joinUrl: string): void {
 
 function setStatus(message: string): void {
   document.getElementById('status')!.textContent = message;
+}
+
+function setBusy(busy: boolean): void {
+  for (const id of ['create-room-btn', 'copy-link-btn', 'leave-room-btn']) {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = busy;
+  }
 }
 
 async function main(): Promise<void> {
@@ -46,17 +56,32 @@ async function main(): Promise<void> {
   const existing = stored[sessionKey(tabId)] as StoredSession | undefined;
 
   if (existing) {
+    const connectMsg: ToBackgroundMessage = {
+      kind: 'connectRoom',
+      roomId: existing.roomId,
+      hostToken: existing.hostToken,
+    };
+    await browser.runtime.sendMessage(connectMsg);
     showRoomView(existing.joinUrl);
   } else {
-    // US-2.5's own scope: disabled if this tab has no detected video.
-    // The popup can't run VideoDetector itself (that's the content
-    // script's job in a different execution context) — it asks instead.
-    const noVideo = !tab.url || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension:');
-    showCreateView(noVideo);
+    const videoStatus = await detectPopupVideoStatus(
+      tab,
+      (id, message) => browser.tabs.sendMessage(id, message),
+    );
+    if (videoStatus === 'restricted') {
+      showCreateView(true);
+      setStatus('CoWatch cannot access this Firefox page.');
+    } else if (videoStatus === 'unreachable') {
+      showCreateView(true);
+      setStatus('CoWatch could not inspect this tab. Reload it and try again.');
+    } else {
+      showCreateView(videoStatus === 'no-video');
+    }
   }
 
   document.getElementById('create-room-btn')?.addEventListener('click', async () => {
     try {
+      setBusy(true);
       setStatus('Creating room...');
       const controlMode = (document.getElementById('control-mode') as HTMLSelectElement).value as ControlMode;
       const result = await createRoom(tab.url as string, controlMode);
@@ -79,6 +104,8 @@ async function main(): Promise<void> {
       setStatus('');
     } catch (err) {
       setStatus(`Failed to create room: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
     }
   });
 
@@ -88,6 +115,7 @@ async function main(): Promise<void> {
     if (!session) return;
 
     try {
+      setBusy(true);
       setStatus('Generating fresh link...');
       // Always mints a new token rather than re-copying the existing
       // joinUrl — matches US-2.12/US-1.4: old tokens aren't revoked, they
@@ -102,15 +130,24 @@ async function main(): Promise<void> {
       setStatus('Copied!');
     } catch (err) {
       setStatus(`Failed to generate link: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
     }
   });
 
   document.getElementById('leave-room-btn')?.addEventListener('click', async () => {
-    const leaveMsg: ToBackgroundMessage = { kind: 'leaveRoom' };
-    await browser.runtime.sendMessage(leaveMsg);
-    await browser.storage.session.remove([sessionKey(tabId)]);
-    showCreateView(false);
-    setStatus('Left room.');
+    try {
+      setBusy(true);
+      const leaveMsg: ToBackgroundMessage = { kind: 'leaveRoom' };
+      await browser.runtime.sendMessage(leaveMsg);
+      await browser.storage.session.remove([sessionKey(tabId)]);
+      showCreateView(false);
+      setStatus('Left room.');
+    } catch (err) {
+      setStatus(`Failed to leave room: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   });
 }
 

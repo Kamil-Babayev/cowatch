@@ -9,6 +9,7 @@ function makeFakeRoomManager(sessions: Record<number, { roomId: string; hostToke
     connect: (...args: unknown[]) => calls.push({ method: 'connect', args }),
     disconnect: (...args: unknown[]) => calls.push({ method: 'disconnect', args }),
     reportLocalEvent: (...args: unknown[]) => calls.push({ method: 'reportLocalEvent', args }),
+    reportHeartbeat: (...args: unknown[]) => calls.push({ method: 'reportHeartbeat', args }),
     getSession: (tabId: number) => sessions[tabId],
   };
 }
@@ -99,7 +100,7 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
     number,
     string,
     string,
-    Record<string, (arg: unknown) => void>,
+    Record<string, (...args: any[]) => void>,
   ];
   assert.equal(tabId, 7);
   assert.equal(roomId, 'room-1');
@@ -111,19 +112,54 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
   // Exercise the injected callbacks directly — this is exactly how
   // RoomManager will call them, without needing a real WebSocket here.
   callbacks.onRemotePlayback({ type: 'pause', currentTime: 1, isPlaying: false });
-  callbacks.onJoinSeek(12);
+  callbacks.onAuthoritativeState({ currentTime: 12, isPlaying: true }, 'join');
+  callbacks.onTimeSync({ currentTime: 13, isPlaying: true }, 99);
   callbacks.onControlDenied('host-only room');
   callbacks.onPresence({ connections: [] });
+  callbacks.onSession({ connectionId: 'me', isHost: true, controlMode: 'open' });
 
-  assert.equal(tabs.sent.length, 5);
+  assert.equal(tabs.sent.length, 7);
   assert.deepEqual(tabs.sent[1], {
     tabId: 7,
     message: { kind: 'remotePlaybackEvent', event: { type: 'pause', currentTime: 1, isPlaying: false } },
   });
-  assert.deepEqual(tabs.sent[2], { tabId: 7, message: { kind: 'joinSeek', targetSeconds: 12 } });
-  assert.deepEqual(tabs.sent[3], {
+  assert.deepEqual(tabs.sent[2], {
+    tabId: 7,
+    message: {
+      kind: 'authoritativeState',
+      currentTime: 12,
+      isPlaying: true,
+      source: 'join',
+    },
+  });
+  assert.deepEqual(tabs.sent[4], {
     tabId: 7,
     message: { kind: 'controlDenied', reason: 'host-only room' },
+  });
+});
+
+test('connectRoom reuses an identical live session instead of closing the host socket', async () => {
+  const roomManager = makeFakeRoomManager({
+    7: { roomId: 'room-live', hostToken: 'host-secret', isHost: true },
+  });
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const handle = createMessageRouter(
+    roomManager as never,
+    tabs,
+    storage,
+    makeFakeLinkMinter(),
+  );
+
+  await handle(
+    { kind: 'connectRoom', roomId: 'room-live', hostToken: 'host-secret' },
+    { tab: { id: 7 } },
+  );
+
+  assert.equal(roomManager.calls.length, 0);
+  assert.deepEqual(tabs.sent.at(-1), {
+    tabId: 7,
+    message: { kind: 'roomConnected', roomId: 'room-live' },
   });
 });
 
@@ -173,8 +209,50 @@ test('checkPendingJoin returns the stored roomId and clears it after reading', a
 
   await handle({ kind: 'checkPendingJoin' }, { tab: { id: 11 } });
 
-  assert.deepEqual(tabs.sent, [{ tabId: 11, message: { kind: 'pendingJoinResult', roomId: 'room-abc' } }]);
+  assert.deepEqual(tabs.sent, [
+    { tabId: 11, message: { kind: 'roomConnected', roomId: 'room-abc' } },
+    { tabId: 11, message: { kind: 'pendingJoinResult', roomId: null } },
+  ]);
   assert.equal(storage.stored['pendingRoomId:11'], undefined);
+});
+
+test('checkPendingJoin restores an active session and clears it after disconnect', async () => {
+  const roomManager = makeFakeRoomManager();
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  storage.stored['activeSession:13'] = {
+    roomId: 'room-restored',
+    hostToken: 'host-restored',
+  };
+  storage.stored['hostSession:13'] = { roomId: 'room-restored' };
+  const handle = createMessageRouter(
+    roomManager as never,
+    tabs,
+    storage,
+    makeFakeLinkMinter(),
+  );
+
+  await handle({ kind: 'checkPendingJoin' }, { tab: { id: 13 } });
+
+  assert.equal(roomManager.calls[0].method, 'connect');
+  assert.deepEqual(roomManager.calls[0].args.slice(0, 3), [
+    13,
+    'room-restored',
+    'host-restored',
+  ]);
+  const callbacks = roomManager.calls[0].args[3] as {
+    onConnectionState(state: 'disconnected'): void;
+  };
+  callbacks.onConnectionState('disconnected');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(storage.stored['activeSession:13'], undefined);
+  assert.equal(storage.stored['hostSession:13'], undefined);
+  assert.deepEqual(tabs.sent.at(-1), {
+    tabId: 13,
+    message: { kind: 'connectionState', state: 'disconnected' },
+  });
 });
 
 test('checkPendingJoin returns null when nothing is pending for this tab', async () => {

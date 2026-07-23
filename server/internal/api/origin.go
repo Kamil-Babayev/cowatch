@@ -6,6 +6,7 @@ import (
 	"net/url"
 )
 
+// MakeCheckOrigin permits the configured web origin and Firefox extensions.
 func MakeCheckOrigin(cfg config.Config) func(*http.Request) bool {
 	return func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")

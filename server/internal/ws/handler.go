@@ -1,7 +1,9 @@
 package ws
 
 import (
+	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -10,6 +12,7 @@ import (
 	"cowatch/internal/store"
 )
 
+// HandleConnect upgrades validated room requests and serves a client session.
 func HandleConnect(hub *Hub, rooms *store.RoomStore, checkOrigin func(*http.Request) bool) http.HandlerFunc {
 	upgrader := websocket.Upgrader{CheckOrigin: checkOrigin}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -17,7 +20,11 @@ func HandleConnect(hub *Hub, rooms *store.RoomStore, checkOrigin func(*http.Requ
 
 		room, ok := rooms.Get(roomID)
 		if !ok {
-			http.Error(w, "room not found", http.StatusNotFound)
+			writeConnectError(w, http.StatusNotFound, "room not found")
+			return
+		}
+		if !checkOrigin(r) {
+			writeConnectError(w, http.StatusForbidden, "origin not allowed")
 			return
 		}
 
@@ -35,16 +42,34 @@ func HandleConnect(hub *Hub, rooms *store.RoomStore, checkOrigin func(*http.Requ
 		}
 
 		c := &client{
-			id:     id,
-			conn:   conn,
-			roomID: roomID,
-			isHost: isHost,
-			send:   make(chan Message, 16),
-			rooms:  rooms,
+			id:          id,
+			conn:        conn,
+			roomID:      roomID,
+			isHost:      isHost,
+			controlMode: room.ControlMode,
+			send:        make(chan Message, 16),
+			done:        make(chan struct{}),
+			rooms:       rooms,
 		}
 
-		hub.join(c)
 		go c.writeLoop()
+		sessionPayload, _ := json.Marshal(SessionPayload{
+			ConnectionID: c.id,
+			IsHost:       c.isHost,
+			ControlMode:  c.controlMode,
+		})
+		hub.sendTo(c, Message{
+			Type:      MsgSession,
+			Payload:   sessionPayload,
+			Timestamp: time.Now().UnixMilli(),
+		})
+		hub.join(c)
 		c.readLoop(hub)
 	}
+}
+
+func writeConnectError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

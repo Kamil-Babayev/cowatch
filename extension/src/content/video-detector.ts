@@ -17,7 +17,22 @@ export function listCandidates(root: ParentNode = document): HTMLVideoElement[] 
 
 function visibleArea(el: HTMLVideoElement): number {
   const rect = el.getBoundingClientRect();
-  return rect.width * rect.height;
+  const view = el.ownerDocument.defaultView;
+  const style = view?.getComputedStyle(el);
+  if (
+    style?.display === 'none' ||
+    style?.visibility === 'hidden' ||
+    Number(style?.opacity) === 0
+  ) {
+    return 0;
+  }
+  const viewportWidth =
+    el.ownerDocument.documentElement.clientWidth || view?.innerWidth || Number.MAX_SAFE_INTEGER;
+  const viewportHeight =
+    el.ownerDocument.documentElement.clientHeight || view?.innerHeight || Number.MAX_SAFE_INTEGER;
+  const width = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
+  const height = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
+  return width * height;
 }
 
 /**
@@ -62,20 +77,35 @@ export class VideoDetector {
   private current: HTMLVideoElement | null = null;
   private manualOverride: HTMLVideoElement | null = null;
   private changeHandlers: VideoDetectorChangeHandler[] = [];
+  private resizeObserver: ResizeObserver | null = null;
+  private view: Window | null;
+  private readonly layoutHandler = () => this.reevaluate();
 
   constructor(root: ParentNode = document) {
     this.root = root;
+    const ownerDocument =
+      root === document ? document : (root as Node).ownerDocument;
+    this.view = ownerDocument?.defaultView ?? null;
     this.observer = new MutationObserver(() => this.reevaluate());
     // childList + subtree: catches lazy-loaded players inserted anywhere
     // under root, which is the common case this story exists to handle.
     this.observer.observe(this.root === document ? document.body : (this.root as Node), {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
     });
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.reevaluate());
+      this.observeCandidateSizes();
+    }
+    this.view?.addEventListener('resize', this.layoutHandler);
+    this.view?.addEventListener('scroll', this.layoutHandler, true);
     this.reevaluate();
   }
 
   private reevaluate(): void {
+    this.observeCandidateSizes();
     if (this.manualOverride && this.manualOverride.isConnected) {
       this.setCurrent(this.manualOverride);
       return;
@@ -87,6 +117,12 @@ export class VideoDetector {
       this.manualOverride = null;
     }
     this.setCurrent(pickLargestVisible(this.listCandidates()));
+  }
+
+  private observeCandidateSizes(): void {
+    if (!this.resizeObserver) return;
+    this.resizeObserver.disconnect();
+    for (const video of this.listCandidates()) this.resizeObserver.observe(video);
   }
 
   private setCurrent(video: HTMLVideoElement | null): void {
@@ -123,6 +159,9 @@ export class VideoDetector {
 
   destroy(): void {
     this.observer.disconnect();
+    this.resizeObserver?.disconnect();
+    this.view?.removeEventListener('resize', this.layoutHandler);
+    this.view?.removeEventListener('scroll', this.layoutHandler, true);
     this.changeHandlers = [];
   }
 }

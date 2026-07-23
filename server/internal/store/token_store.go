@@ -9,8 +9,10 @@ import (
 )
 
 var (
+	// ErrTokenNotFound indicates that a join token was never issued.
 	ErrTokenNotFound = errors.New("token not found")
-	ErrTokenExpired  = errors.New("token expired")
+	// ErrTokenExpired indicates that a known join token exceeded its TTL.
+	ErrTokenExpired = errors.New("token expired")
 )
 
 type tokenRecord struct {
@@ -18,18 +20,22 @@ type tokenRecord struct {
 	ExpiresAt time.Time
 }
 
+// TokenStore safely stores expiring invitation tokens in memory.
 type TokenStore struct {
-	mu     sync.Mutex
-	tokens map[string]tokenRecord
-	done   chan struct{}
+	mu       sync.Mutex
+	tokens   map[string]tokenRecord
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
+// NewTokenStore creates a token store and starts its cleanup loop.
 func NewTokenStore(cleanupInterval time.Duration) *TokenStore {
 	s := &TokenStore{tokens: make(map[string]tokenRecord), done: make(chan struct{})}
 	go s.cleanup(cleanupInterval)
 	return s
 }
 
+// Create issues a token for roomID with the supplied lifetime.
 func (s *TokenStore) Create(roomID string, ttl time.Duration) (string, error) {
 	token, err := idgen.JoinToken()
 	if err != nil {
@@ -41,6 +47,7 @@ func (s *TokenStore) Create(roomID string, ttl time.Duration) (string, error) {
 	return token, nil
 }
 
+// Resolve returns the room associated with a valid, unexpired token.
 func (s *TokenStore) Resolve(token string) (roomID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,6 +81,7 @@ func (s *TokenStore) cleanup(interval time.Duration) {
 	}
 }
 
+// Stop terminates cleanup and is safe to call more than once.
 func (s *TokenStore) Stop() {
-	close(s.done)
+	s.stopOnce.Do(func() { close(s.done) })
 }

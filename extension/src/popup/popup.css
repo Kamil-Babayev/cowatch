@@ -56,6 +56,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   width: 320px;
   margin: 0;
@@ -155,6 +159,19 @@ p#no-video-message {
   color: var(--rust);
   font-size: 12px;
   margin: 0 0 12px;
+}
+
+#loading-view {
+  color: var(--paper-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 12px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none !important;
+  }
 }
 
 button {

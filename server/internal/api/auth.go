@@ -20,6 +20,7 @@ func validHostToken(r *http.Request, expected string) bool {
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
+// ValidHostTokenQuery verifies the WebSocket hostToken query credential.
 func ValidHostTokenQuery(r *http.Request, expected string) bool {
 	provided := r.URL.Query().Get("hostToken")
 	if provided == "" {

@@ -28,7 +28,7 @@ func handleResolveJoin(deps Deps) http.HandlerFunc {
 			case errors.Is(err, store.ErrTokenNotFound):
 				writeJSON(w, http.StatusNotFound, errorResponse{Error: "link not found"})
 			default:
-				http.Error(w, "internal error", http.StatusInternalServerError)
+				writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 			}
 			return
 		}

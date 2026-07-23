@@ -3,6 +3,7 @@
 // same edit, or the two sides will silently disagree about the wire format.
 
 export type MessageType =
+  | 'session'
   | 'presence'
   | 'play'
   | 'pause'
@@ -10,7 +11,8 @@ export type MessageType =
   | 'timeSync'
   | 'stateRequest'
   | 'stateResponse'
-  | 'controlDenied';
+  | 'controlDenied'
+  | 'roomClosed';
 
 export interface Message<T = unknown> {
   type: MessageType;
@@ -27,6 +29,12 @@ export interface PresencePayload {
   connections: PresenceEntry[];
 }
 
+export interface SessionPayload {
+  connectionId: string;
+  isHost: boolean;
+  controlMode: 'open' | 'host-only';
+}
+
 export interface PlaybackPayload {
   currentTime: number;
   isPlaying: boolean;
@@ -39,4 +47,8 @@ export interface StateResponsePayload {
 
 export interface ControlDeniedPayload {
   reason: string;
+}
+
+export interface RoomClosedPayload {
+  reason: 'host-left' | 'server-shutdown';
 }

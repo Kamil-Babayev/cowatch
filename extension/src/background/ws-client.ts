@@ -23,6 +23,9 @@ export interface RoomConnection {
  * with each type; this layer's job stops at "parse it and hand it over."
  */
 export type RoomMessageHandler = (msg: Message) => void;
+export type RoomConnectionStateHandler = (
+  state: 'connecting' | 'connected' | 'disconnected' | 'error',
+) => void;
 
 // Given a roomId (and optional hostToken), opens a WebSocket to the room
 // server. Always logs to console (useful for manual dev testing, per this
@@ -35,11 +38,14 @@ export function connectToRoom(
   roomId: string,
   hostToken?: string,
   onMessage?: RoomMessageHandler,
+  onState?: RoomConnectionStateHandler,
 ): RoomConnection {
   const socket = new WebSocket(wsURLForRoom(roomId, hostToken));
+  onState?.('connecting');
 
   socket.addEventListener('open', () => {
     console.log('[CoWatch] connected to room', roomId);
+    onState?.('connected');
   });
 
   socket.addEventListener('message', (event) => {
@@ -63,10 +69,12 @@ export function connectToRoom(
 
   socket.addEventListener('close', (event) => {
     console.log('[CoWatch] disconnected from room', roomId, 'code:', event.code);
+    onState?.('disconnected');
   });
 
   socket.addEventListener('error', (event) => {
     console.error('[CoWatch] WebSocket error for room', roomId, event);
+    onState?.('error');
   });
 
   return {

@@ -30,7 +30,14 @@ func main() {
 	api.Register(mux, api.Deps{Rooms: rooms, Tokens: tokens, BaseURL: cfg.JoinBaseURL})
 	mux.Handle("GET /rooms/{roomId}/connect", ws.HandleConnect(hub, rooms, api.MakeCheckOrigin(cfg)))
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: api.RecoverMiddleware(mux)}
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           api.RecoverMiddleware(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		log.Printf("listening on %s", cfg.Addr)
@@ -44,8 +51,11 @@ func main() {
 	<-stop
 
 	tokens.Stop()
+	hub.CloseAll("server-shutdown")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(ctx)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("shutdown error: %v", err)
+	}
 }

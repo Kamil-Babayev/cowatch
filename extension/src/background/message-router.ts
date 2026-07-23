@@ -39,6 +39,68 @@ export function createMessageRouter(
   sessionStorage: SessionStorageAPI,
   linkMinter: LinkMinter,
 ) {
+  function activeSessionKey(tabId: number): string {
+    return `activeSession:${tabId}`;
+  }
+
+  function hostSessionKey(tabId: number): string {
+    return `hostSession:${tabId}`;
+  }
+
+  async function clearSessionIfCurrent(tabId: number, roomId: string): Promise<void> {
+    const activeKey = activeSessionKey(tabId);
+    const result = await sessionStorage.get([activeKey]);
+    const active = result[activeKey] as { roomId?: string } | undefined;
+    if (active?.roomId === roomId) {
+      await sessionStorage.remove([activeKey, hostSessionKey(tabId)]);
+    }
+  }
+
+  async function connectTab(tabId: number, roomId: string, hostToken?: string): Promise<void> {
+    const current = roomManager.getSession(tabId);
+    if (
+      current?.roomId === roomId
+      && current.hostToken === hostToken
+    ) {
+      await tabs.sendMessage(tabId, { kind: 'roomConnected', roomId });
+      return;
+    }
+
+    await sessionStorage.set({
+      [activeSessionKey(tabId)]: { roomId, hostToken },
+    });
+    roomManager.connect(tabId, roomId, hostToken, {
+      onRemotePlayback: (event) =>
+        tabs.sendMessage(tabId, { kind: 'remotePlaybackEvent', event }),
+      onAuthoritativeState: (state, source) =>
+        tabs.sendMessage(tabId, {
+          kind: 'authoritativeState',
+          currentTime: state.currentTime,
+          isPlaying: state.isPlaying,
+          source,
+        }),
+      onTimeSync: (state, timestamp) =>
+        tabs.sendMessage(tabId, { kind: 'timeSync', state, timestamp }),
+      onControlDenied: (reason) =>
+        tabs.sendMessage(tabId, { kind: 'controlDenied', reason }),
+      onPresence: (payload) =>
+        tabs.sendMessage(tabId, { kind: 'presenceUpdate', payload }),
+      onSession: (payload) =>
+        tabs.sendMessage(tabId, { kind: 'sessionInfo', payload }),
+      onConnectionState: (state) => {
+        if (state === 'error' || state === 'disconnected') {
+          void clearSessionIfCurrent(tabId, roomId);
+        }
+        return tabs.sendMessage(tabId, { kind: 'connectionState', state });
+      },
+      onRoomClosed: (reason) => {
+        void clearSessionIfCurrent(tabId, roomId);
+        void tabs.sendMessage(tabId, { kind: 'roomClosed', reason });
+      },
+    });
+    await tabs.sendMessage(tabId, { kind: 'roomConnected', roomId });
+  }
+
   return async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<void> {
     const tabId = sender.tab?.id;
     if (tabId == null) return; // every message this router handles is tab-scoped
@@ -48,18 +110,17 @@ export function createMessageRouter(
         roomManager.reportLocalEvent(tabId, msg.event);
         return;
 
+      case 'playbackHeartbeat':
+        roomManager.reportHeartbeat(tabId, msg.state);
+        return;
+
       case 'connectRoom':
-        roomManager.connect(tabId, msg.roomId, msg.hostToken, {
-          onRemotePlayback: (event) => tabs.sendMessage(tabId, { kind: 'remotePlaybackEvent', event }),
-          onJoinSeek: (targetSeconds) => tabs.sendMessage(tabId, { kind: 'joinSeek', targetSeconds }),
-          onControlDenied: (reason) => tabs.sendMessage(tabId, { kind: 'controlDenied', reason }),
-          onPresence: (payload) => tabs.sendMessage(tabId, { kind: 'presenceUpdate', payload }),
-        });
-        await tabs.sendMessage(tabId, { kind: 'roomConnected', roomId: msg.roomId });
+        await connectTab(tabId, msg.roomId, msg.hostToken);
         return;
 
       case 'leaveRoom':
         roomManager.disconnect(tabId);
+        await sessionStorage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);
         return;
 
       case 'joinRequested':
@@ -78,13 +139,25 @@ export function createMessageRouter(
         return;
 
       case 'checkPendingJoin': {
+        const activeKey = activeSessionKey(tabId);
         const key = `pendingRoomId:${tabId}`;
-        const result = await sessionStorage.get([key]);
+        const result = await sessionStorage.get([activeKey, key]);
+        const active = result[activeKey] as
+          | { roomId: string; hostToken?: string }
+          | undefined;
+        if (active?.roomId) {
+          await connectTab(tabId, active.roomId, active.hostToken);
+          await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId: null });
+          return;
+        }
         const roomId = (result[key] as string | undefined) ?? null;
         if (roomId) {
           // Cleared once read — a stale leftover key must never cause a
           // second, unrelated page load to auto-join the same room.
           await sessionStorage.remove([key]);
+          await connectTab(tabId, roomId);
+          await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId: null });
+          return;
         }
         await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId });
         return;

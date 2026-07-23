@@ -1,3 +1,5 @@
+import { JITSI_DOMAIN } from '../shared/config.ts';
+
 /**
  * Jitsi IFrame API embed — US-2.14.
  *
@@ -27,25 +29,6 @@ declare global {
       options: Record<string, unknown>,
     ) => JitsiExternalAPIInstance;
   }
-}
-
-const JITSI_DOMAIN = 'meet.jit.si';
-const JITSI_SCRIPT_URL = `https://${JITSI_DOMAIN}/external_api.js`;
-
-let scriptLoadPromise: Promise<void> | null = null;
-
-function loadJitsiScript(): Promise<void> {
-  if (window.JitsiMeetExternalAPI) return Promise.resolve();
-  if (scriptLoadPromise) return scriptLoadPromise;
-
-  scriptLoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = JITSI_SCRIPT_URL;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Failed to load Jitsi external_api.js'));
-    document.head.appendChild(script);
-  });
-  return scriptLoadPromise;
 }
 
 /**
@@ -87,7 +70,6 @@ async function deriveJitsiRoomName(roomId: string): Promise<string> {
  * omitted, for any caller that doesn't need shadow-DOM placement.
  */
 export async function injectJitsi(roomId: string, parentNode?: HTMLElement): Promise<JitsiHandle> {
-  await loadJitsiScript();
   const jitsiRoomName = await deriveJitsiRoomName(roomId);
 
   const container =

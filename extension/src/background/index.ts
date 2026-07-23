@@ -27,7 +27,9 @@ const linkMinterAdapter: LinkMinter = { mintFreshLink };
 const handleMessage = createMessageRouter(roomManager, tabsAdapter, sessionStorageAdapter, linkMinterAdapter);
 
 browser.runtime.onMessage.addListener((message: unknown, sender) => {
-  handleMessage(message as ToBackgroundMessage, sender);
+  void handleMessage(message as ToBackgroundMessage, sender).catch((err) => {
+    console.error('[CoWatch] background message failed:', err);
+  });
   // No return value: every response this router produces is sent
   // proactively via tabs.sendMessage, not as a reply to this listener.
 });
@@ -37,6 +39,11 @@ browser.runtime.onMessage.addListener((message: unknown, sender) => {
 // alternative is a slow, silent resource leak in normal use.
 browser.tabs.onRemoved.addListener((tabId) => {
   roomManager.disconnect(tabId);
+  void browser.storage.session.remove([
+    `activeSession:${tabId}`,
+    `hostSession:${tabId}`,
+    `pendingRoomId:${tabId}`,
+  ]);
 });
 
 (globalThis as unknown as { cowatchConnect: typeof roomManager.connect }).cowatchConnect =

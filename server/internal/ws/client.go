@@ -4,26 +4,36 @@ import (
 	"cowatch/internal/store"
 	"encoding/json"
 	"log"
+	"math"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type client struct {
-	id     string
-	conn   *websocket.Conn
-	roomID string
-	isHost bool
-	send   chan Message
-	rooms  *store.RoomStore
+	id          string
+	conn        *websocket.Conn
+	roomID      string
+	isHost      bool
+	controlMode string
+	send        chan Message
+	done        chan struct{}
+	doneOnce    sync.Once
+	rooms       *store.RoomStore
 }
 
 func (c *client) readLoop(hub *Hub) {
 	defer func() {
 		hub.leave(c)
-		close(c.send)
-		c.conn.Close()
+		c.finish()
 	}()
+
+	c.conn.SetReadLimit(64 * 1024)
+	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
 
 	for {
 		var msg Message
@@ -73,6 +83,10 @@ func (c *client) readLoop(hub *Hub) {
 				log.Printf("ws: bad payload for %q from %s: %v", msg.Type, c.id, err)
 				continue
 			}
+			if payload.CurrentTime < 0 || math.IsNaN(payload.CurrentTime) || math.IsInf(payload.CurrentTime, 0) {
+				log.Printf("ws: invalid currentTime for %q from %s", msg.Type, c.id)
+				continue
+			}
 
 			now := time.Now().UnixMilli()
 			c.rooms.UpdatePlaybackState(c.roomID, store.PlaybackState{
@@ -94,12 +108,40 @@ func (c *client) readLoop(hub *Hub) {
 }
 
 func (c *client) writeLoop() {
-	for msg := range c.send {
-		if err := c.conn.WriteJSON(msg); err != nil {
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-c.done:
 			return
+		case <-ping.C:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				c.finish()
+				return
+			}
+		case msg := <-c.send:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.conn.WriteJSON(msg); err != nil {
+				c.finish()
+				return
+			}
+			if msg.Type == MsgRoomClosed {
+				_ = c.conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(4001, "room closed"),
+					time.Now().Add(5*time.Second),
+				)
+				c.finish()
+				return
+			}
 		}
 	}
-	// c.send closing (from readLoop's cleanup) is what ends this loop.
 }
 
-var _ = json.RawMessage{} // payload type used via Message, keeping import honest
+func (c *client) finish() {
+	c.doneOnce.Do(func() {
+		close(c.done)
+		_ = c.conn.Close()
+	})
+}

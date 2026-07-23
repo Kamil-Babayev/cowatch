@@ -2,18 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CoWatch — Join</title>
     <link rel="stylesheet" href="landing.css" />
   </head>
   <body>
-    <div>
+    <main>
       <div class="brand">
         <span class="status-dot" aria-hidden="true"></span>
         <span class="wordmark">COWATCH</span>
       </div>
 
       <div class="card">
-        <div id="state-loading">Checking your link…</div>
+        <div id="state-loading" role="status" aria-live="polite">Checking your link…</div>
 
         <div id="state-valid" hidden>
           <p>
@@ -24,21 +25,26 @@
           <button id="continue-btn">Continue</button>
         </div>
 
-        <div id="state-expired" hidden>
+        <div id="state-expired" role="alert" hidden>
           <p>This link has expired. Ask whoever shared it for a fresh one.</p>
         </div>
 
-        <div id="state-not-found" hidden>
+        <div id="state-not-found" role="alert" hidden>
           <p>This link doesn't look right — double check it and try again.</p>
         </div>
 
-        <div id="state-no-extension" hidden>
+        <div id="state-no-extension" role="alert" hidden>
           <p>You'll need the CoWatch extension installed first.</p>
           <a href="https://addons.mozilla.org/" target="_blank" rel="noopener">Install CoWatch</a>
           <p>Then reload this page.</p>
         </div>
+
+        <div id="state-error" role="alert" hidden>
+          <p>CoWatch could not check this link. Check your connection and try again.</p>
+          <button id="retry-btn" type="button">Try Again</button>
+        </div>
       </div>
-    </div>
+    </main>
 
     <script src="app.js"></script>
   </body>

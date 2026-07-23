@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const watch = process.argv.includes('--watch');
 
@@ -7,12 +7,29 @@ const watch = process.argv.includes('--watch');
 // env var at build time (`SERVER_BASE_URL=https://cowatch.app npm run build`),
 // never hardcoded in logic files. Defaults to local dev.
 const serverBaseURL = process.env.SERVER_BASE_URL ?? 'http://localhost:8080';
+const jitsiDomain = process.env.JITSI_DOMAIN ?? 'meet.jit.si';
 
 async function copyStatic() {
   await mkdir('dist/popup', { recursive: true });
+  await mkdir('dist/vendor', { recursive: true });
   await cp('manifest.json', 'dist/manifest.json');
   await cp('src/popup/index.html', 'dist/popup/index.html');
   await cp('src/popup/popup.css', 'dist/popup/popup.css');
+  const jitsiSource = await readFile('vendor/jitsi-external-api.js', 'utf8');
+  const replacements = [
+    ['new Function("return this")()', 'globalThis'],
+    ['Function("return this")()', 'globalThis'],
+    [`Function('return require("'+t+'")')()`, 'undefined'],
+  ];
+  let jitsiFirefox = jitsiSource;
+  for (const [unsafe, safe] of replacements) {
+    const matches = jitsiFirefox.split(unsafe).length - 1;
+    if (matches !== 1) {
+      throw new Error(`unexpected Jitsi wrapper shape for Firefox-safe replacement: ${unsafe}`);
+    }
+    jitsiFirefox = jitsiFirefox.replace(unsafe, safe);
+  }
+  await writeFile('dist/vendor/jitsi-external-api.js', jitsiFirefox);
 }
 
 const buildOptions = {
@@ -25,7 +42,7 @@ const buildOptions = {
   bundle: true,
   outdir: 'dist',
   format: 'iife', // classic scripts — matches manifest's non-module background/content_scripts
-  target: 'firefox115',
+  target: 'firefox140',
   sourcemap: true,
   logLevel: 'info',
   define: {
@@ -36,6 +53,7 @@ const buildOptions = {
     // is declared as an ambient string in src/shared/globals.d.ts so tsc
     // and esbuild agree on what it is.
     '__SERVER_BASE_URL__': JSON.stringify(serverBaseURL),
+    '__JITSI_DOMAIN__': JSON.stringify(jitsiDomain),
   },
   loader: {
     // US-3.2: the in-page overlay lives in a shadow root, which manifest
@@ -56,7 +74,7 @@ async function run() {
     console.log(`watching for changes (SERVER_BASE_URL=${serverBaseURL})...`);
   } else {
     await esbuild.build(buildOptions);
-    console.log(`build complete (SERVER_BASE_URL=${serverBaseURL})`);
+    console.log(`build complete (SERVER_BASE_URL=${serverBaseURL}, JITSI_DOMAIN=${jitsiDomain})`);
   }
 }
 

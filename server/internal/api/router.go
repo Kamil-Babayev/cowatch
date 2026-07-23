@@ -10,12 +10,14 @@ import (
 	"cowatch/static"
 )
 
+// Deps contains the stores and public URL required by HTTP handlers.
 type Deps struct {
 	Rooms   *store.RoomStore
 	Tokens  *store.TokenStore
 	BaseURL string
 }
 
+// Register installs all HTTP and static routes on mux.
 func Register(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("GET /healthz", handleHealth)
 	createLimiter := newRateLimiter(5, time.Minute) // 5 rooms/IP/minute
