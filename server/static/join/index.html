@@ -3,27 +3,41 @@
   <head>
     <meta charset="utf-8" />
     <title>CoWatch — Join</title>
+    <link rel="stylesheet" href="landing.css" />
   </head>
   <body>
-    <div id="state-loading">Checking your link...</div>
+    <div>
+      <div class="brand">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="wordmark">COWATCH</span>
+      </div>
 
-    <div id="state-valid" hidden>
-      <p>This will open <strong id="destination-domain"></strong> to join the watch party.</p>
-      <button id="continue-btn">Continue</button>
-    </div>
+      <div class="card">
+        <div id="state-loading">Checking your link…</div>
 
-    <div id="state-expired" hidden>
-      <p>This link has expired. Ask whoever shared it for a fresh one.</p>
-    </div>
+        <div id="state-valid" hidden>
+          <p>
+            This will open<br />
+            <strong id="destination-domain"></strong><br />
+            to join the watch party.
+          </p>
+          <button id="continue-btn">Continue</button>
+        </div>
 
-    <div id="state-not-found" hidden>
-      <p>This link doesn't look right — double check it and try again.</p>
-    </div>
+        <div id="state-expired" hidden>
+          <p>This link has expired. Ask whoever shared it for a fresh one.</p>
+        </div>
 
-    <div id="state-no-extension" hidden>
-      <p>You'll need the CoWatch extension installed first.</p>
-      <a href="https://addons.mozilla.org/" target="_blank" rel="noopener">Install CoWatch</a>
-      <p>Then reload this page.</p>
+        <div id="state-not-found" hidden>
+          <p>This link doesn't look right — double check it and try again.</p>
+        </div>
+
+        <div id="state-no-extension" hidden>
+          <p>You'll need the CoWatch extension installed first.</p>
+          <a href="https://addons.mozilla.org/" target="_blank" rel="noopener">Install CoWatch</a>
+          <p>Then reload this page.</p>
+        </div>
+      </div>
     </div>
 
     <script src="app.js"></script>

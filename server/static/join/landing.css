@@ -1,0 +1,191 @@
+/*
+ * Same design language as the extension's popup.css/overlay.css — dark
+ * charcoal + sync-mark amber, monospace wordmark/labels. Consistency
+ * across every CoWatch surface (popup, in-page overlay, this landing
+ * page) is the visual identity; no new signature element invented here.
+ *
+ * Real gotcha worth documenting: app.js toggles the browser's native
+ * `hidden` attribute, not a class. A same-or-higher-specificity rule that
+ * sets `display: flex` on these IDs would silently override the
+ * browser's default `[hidden] { display: none }` and show every state at
+ * once. The `[hidden]` rule below with !important is what prevents that.
+ */
+
+:root {
+  --ink: #17140f;
+  --panel: #1d1912;
+  --paper: #f1ecdf;
+  --paper-dim: #9c9585;
+  --amber: #e8a33d;
+  --amber-deep: #5c4420;
+  --rust: #c0532f;
+
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.wordmark {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--paper);
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--amber-deep);
+  border-radius: 10px;
+  padding: 28px 24px;
+  text-align: center;
+}
+
+#state-loading,
+#state-valid,
+#state-expired,
+#state-not-found,
+#state-no-extension {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+#state-loading {
+  color: var(--paper-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+#state-loading::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+#state-valid p {
+  margin: 0;
+  font-size: 14px;
+}
+
+#destination-domain {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--amber);
+  background: #0f0d09;
+  border: 1px solid var(--amber-deep);
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin-top: 6px;
+}
+
+button,
+.btn-link {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+#continue-btn {
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+  padding: 12px 28px;
+}
+
+#continue-btn:hover {
+  background: #f0b45c;
+}
+
+#state-expired p,
+#state-not-found p {
+  margin: 0;
+  color: var(--rust);
+  font-size: 14px;
+}
+
+#state-no-extension p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--paper);
+}
+
+#state-no-extension p:last-child {
+  color: var(--paper-dim);
+  font-size: 12px;
+}
+
+#state-no-extension a {
+  background: var(--amber);
+  color: var(--ink);
+  font-weight: 700;
+  padding: 10px 22px;
+}
+
+#state-no-extension a:hover {
+  background: #f0b45c;
+}
