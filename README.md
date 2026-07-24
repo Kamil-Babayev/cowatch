@@ -92,12 +92,12 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.0` version:
+`0.1.1` version:
 
 ```sh
 git push origin master
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 When the workflow succeeds:
@@ -152,7 +152,7 @@ and forward router TCP 8080 to that host's TCP 8080.
 Replace `USERNAME` and `PUBLIC_IP`:
 
 ```sh
-docker pull USERNAME/cowatch-server:latest
+docker pull kbabayev/cowatch-server:latest
 docker run -d \
   --name cowatch \
   --restart unless-stopped \
