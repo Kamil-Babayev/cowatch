@@ -14,7 +14,7 @@ export async function detectPopupVideoStatus(
   tab: TabSummary,
   sendMessage: (
     tabId: number,
-    message: { kind: 'videoStatusRequest' },
+    message: { kind: 'queryVideoCandidates'; tabId: number },
   ) => Promise<unknown>,
 ): Promise<PopupVideoStatus> {
   if (tab.id == null) return 'restricted';
@@ -28,7 +28,8 @@ export async function detectPopupVideoStatus(
 
   try {
     const result = (await sendMessage(tabId, {
-      kind: 'videoStatusRequest',
+      kind: 'queryVideoCandidates',
+      tabId,
     })) as { hasVideo?: boolean };
     return result.hasVideo ? 'available' : 'no-video';
   } catch {

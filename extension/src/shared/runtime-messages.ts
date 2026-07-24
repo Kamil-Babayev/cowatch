@@ -1,19 +1,25 @@
 import type { PlaybackEvent } from '../content/playback-events.ts';
 import type { PresencePayload } from './messages.ts';
 import type { PlaybackPayload, SessionPayload } from './messages.ts';
+import type { VideoSelection } from './video-frames.ts';
 
 /** Content script -> background */
 export type ToBackgroundMessage =
   | { kind: 'localPlaybackEvent'; event: PlaybackEvent }
   | { kind: 'playbackHeartbeat'; state: PlaybackPayload }
+  | { kind: 'playbackApplyFailed' }
+  | { kind: 'frameVideoCandidatesChanged' }
+  | { kind: 'queryVideoCandidates'; tabId?: number }
+  | { kind: 'selectVideoCandidate'; selection: VideoSelection }
+  | { kind: 'clearVideoSelection' }
   // US-2.11: landing-bridge content script telling background the user
   // clicked "continue" on a resolved join link.
   | { kind: 'joinRequested'; roomId: string; videoUrl: string }
   // US-2.5: popup, after it already created/resolved a room via the
   // server's REST API directly — background's only job from here is to
   // actually open the WebSocket for this tab.
-  | { kind: 'connectRoom'; roomId: string; hostToken?: string }
-  | { kind: 'leaveRoom' }
+  | { kind: 'connectRoom'; roomId: string; hostToken?: string; tabId?: number }
+  | { kind: 'leaveRoom'; tabId?: number }
   | { kind: 'extensionInstalledCheck' } // US-2.10, sent by the landing-bridge script
   // US-2.11: sent by the generic content script on every page load to ask
   // "was I just navigated here as part of a join handoff?" — content
@@ -29,6 +35,10 @@ export type ToBackgroundMessage =
 
 /** Background -> content script (for a specific tab) */
 export type ToContentMessage =
+  | { kind: 'frameVideoStatusRequest' }
+  | { kind: 'activateVideoCandidate'; candidateId: string }
+  | { kind: 'deactivateVideoCandidate' }
+  | { kind: 'playbackApplyFailed' }
   | { kind: 'remotePlaybackEvent'; event: PlaybackEvent }
   | {
       kind: 'authoritativeState';

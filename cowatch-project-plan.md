@@ -206,4 +206,11 @@ Three rounds of self-review, jury-style, until no further inconsistencies turned
 > content-side video sampling. Pull requests independently enforce 80% Go
 > statement coverage and 80% extension line coverage. See `epic3report.md`,
 > `server/README.md`, and `server/openapi.yaml` for the final contract.
-> Production hosting and AMO submission remain out of scope.
+> The test server is hosted on Render; AMO submission remains out of scope.
+
+> **Cross-frame detection note (July 2026):** Generic detection now runs a
+> lightweight player agent in every accessible frame. The background script
+> enumerates frames, selects the largest effectively visible video across the
+> tab, and targets playback messages only to that frame. Overlay, pending-join,
+> and Jitsi behavior remain top-frame-only. This covers cross-origin embedded
+> players without adding site-specific rules.

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMessageRouter, type TabsAPI, type SessionStorageAPI, type LinkMinter } from './message-router.ts';
+import { VideoCoordinator } from './video-coordinator.ts';
 
 function makeFakeRoomManager(sessions: Record<number, { roomId: string; hostToken?: string; isHost: boolean }> = {}) {
   const calls: { method: string; args: unknown[] }[] = [];
@@ -10,6 +11,7 @@ function makeFakeRoomManager(sessions: Record<number, { roomId: string; hostToke
     disconnect: (...args: unknown[]) => calls.push({ method: 'disconnect', args }),
     reportLocalEvent: (...args: unknown[]) => calls.push({ method: 'reportLocalEvent', args }),
     reportHeartbeat: (...args: unknown[]) => calls.push({ method: 'reportHeartbeat', args }),
+    requestState: (...args: unknown[]) => calls.push({ method: 'requestState', args }),
     getSession: (tabId: number) => sessions[tabId],
   };
 }
@@ -86,6 +88,95 @@ test('localPlaybackEvent forwards to roomManager.reportLocalEvent with the right
   assert.deepEqual(roomManager.calls, [{ method: 'reportLocalEvent', args: [42, event] }]);
 });
 
+test('ignores playback messages from a frame that is not selected', async () => {
+  const roomManager = makeFakeRoomManager();
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const videos = new VideoCoordinator(
+    {
+      async sendMessage(_tabId, message, options) {
+        if (message.kind === 'frameVideoStatusRequest' && options?.frameId === 2) {
+          return {
+            candidates: [{
+              candidateId: 'movie',
+              width: 800,
+              height: 450,
+              visibleArea: 360_000,
+              currentTime: 0,
+              isPlaying: false,
+            }],
+            childFrames: [],
+          };
+        }
+        return undefined;
+      },
+    },
+    {
+      async getAllFrames() {
+        return [{ frameId: 2, parentFrameId: -1 }];
+      },
+    },
+  );
+  await videos.discover(42);
+  const handle = createMessageRouter(
+    roomManager as never,
+    tabs,
+    storage,
+    makeFakeLinkMinter(),
+    videos,
+  );
+  const event = { type: 'play' as const, currentTime: 5, isPlaying: true };
+
+  await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 }, frameId: 0 });
+  await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 }, frameId: 2 });
+
+  assert.deepEqual(roomManager.calls, [
+    { method: 'reportLocalEvent', args: [42, event] },
+  ]);
+});
+
+test('popup video query uses its explicit tab id', async () => {
+  const roomManager = makeFakeRoomManager();
+  const tabs = makeFakeTabs();
+  const storage = makeFakeSessionStorage();
+  const videos = new VideoCoordinator(
+    {
+      async sendMessage(_tabId, message) {
+        if (message.kind === 'frameVideoStatusRequest') {
+          return {
+            candidates: [{
+              candidateId: 'top-video',
+              width: 640,
+              height: 360,
+              visibleArea: 230_400,
+              currentTime: 0,
+              isPlaying: false,
+            }],
+            childFrames: [],
+          };
+        }
+        return undefined;
+      },
+    },
+    {
+      async getAllFrames() {
+        return [{ frameId: 0, parentFrameId: -1 }];
+      },
+    },
+  );
+  const handle = createMessageRouter(
+    roomManager as never,
+    tabs,
+    storage,
+    makeFakeLinkMinter(),
+    videos,
+  );
+
+  const result = await handle({ kind: 'queryVideoCandidates', tabId: 8 }, {});
+
+  assert.equal((result as { hasVideo: boolean }).hasVideo, true);
+});
+
 test('connectRoom wires callbacks that route back to the same tab', async () => {
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
@@ -118,7 +209,9 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
   callbacks.onPresence({ connections: [] });
   callbacks.onSession({ connectionId: 'me', isHost: true, controlMode: 'open' });
 
-  assert.equal(tabs.sent.length, 7);
+  // Authoritative state and session information are delivered both to the
+  // top-frame UI and to the selected player frame.
+  assert.equal(tabs.sent.length, 9);
   assert.deepEqual(tabs.sent[1], {
     tabId: 7,
     message: { kind: 'remotePlaybackEvent', event: { type: 'pause', currentTime: 1, isPlaying: false } },
@@ -132,7 +225,7 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
       source: 'join',
     },
   });
-  assert.deepEqual(tabs.sent[4], {
+  assert.deepEqual(tabs.sent[5], {
     tabId: 7,
     message: { kind: 'controlDenied', reason: 'host-only room' },
   });

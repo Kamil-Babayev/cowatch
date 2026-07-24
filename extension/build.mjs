@@ -46,6 +46,7 @@ async function copyStatic() {
 const buildOptions = {
   entryPoints: {
     'background/index': 'src/background/index.ts',
+    'content/frame-agent': 'src/content/frame-agent.ts',
     'content/index': 'src/content/index.ts',
     'popup/index': 'src/popup/index.ts',
     'landing-bridge/index': 'src/landing-bridge/index.ts',

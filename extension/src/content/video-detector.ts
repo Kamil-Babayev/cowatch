@@ -15,7 +15,7 @@ export function listCandidates(root: ParentNode = document): HTMLVideoElement[] 
   return Array.from(root.querySelectorAll('video'));
 }
 
-function visibleArea(el: HTMLVideoElement): number {
+export function elementVisibleArea(el: Element): number {
   const rect = el.getBoundingClientRect();
   const view = el.ownerDocument.defaultView;
   const style = view?.getComputedStyle(el);
@@ -49,10 +49,10 @@ export function pickLargestVisible(candidates: HTMLVideoElement[]): HTMLVideoEle
   if (candidates.length === 0) return null;
 
   let best = candidates[0];
-  let bestArea = visibleArea(best);
+  let bestArea = elementVisibleArea(best);
 
   for (const el of candidates.slice(1)) {
-    const area = visibleArea(el);
+    const area = elementVisibleArea(el);
     if (area > bestArea) {
       best = el;
       bestArea = area;
@@ -77,6 +77,7 @@ export class VideoDetector {
   private current: HTMLVideoElement | null = null;
   private manualOverride: HTMLVideoElement | null = null;
   private changeHandlers: VideoDetectorChangeHandler[] = [];
+  private candidatesChangeHandlers: (() => void)[] = [];
   private resizeObserver: ResizeObserver | null = null;
   private view: Window | null;
   private readonly layoutHandler = () => this.reevaluate();
@@ -106,6 +107,7 @@ export class VideoDetector {
 
   private reevaluate(): void {
     this.observeCandidateSizes();
+    for (const handler of this.candidatesChangeHandlers) handler();
     if (this.manualOverride && this.manualOverride.isConnected) {
       this.setCurrent(this.manualOverride);
       return;
@@ -157,11 +159,19 @@ export class VideoDetector {
     };
   }
 
+  onCandidatesChange(handler: () => void): () => void {
+    this.candidatesChangeHandlers.push(handler);
+    return () => {
+      this.candidatesChangeHandlers = this.candidatesChangeHandlers.filter((h) => h !== handler);
+    };
+  }
+
   destroy(): void {
     this.observer.disconnect();
     this.resizeObserver?.disconnect();
     this.view?.removeEventListener('resize', this.layoutHandler);
     this.view?.removeEventListener('scroll', this.layoutHandler, true);
     this.changeHandlers = [];
+    this.candidatesChangeHandlers = [];
   }
 }

@@ -60,13 +60,14 @@ async function main(): Promise<void> {
       kind: 'connectRoom',
       roomId: existing.roomId,
       hostToken: existing.hostToken,
+      tabId,
     };
     await browser.runtime.sendMessage(connectMsg);
     showRoomView(existing.joinUrl);
   } else {
     const videoStatus = await detectPopupVideoStatus(
       tab,
-      (id, message) => browser.tabs.sendMessage(id, message),
+      (_id, message) => browser.runtime.sendMessage(message),
     );
     if (videoStatus === 'restricted') {
       showCreateView(true);
@@ -97,6 +98,7 @@ async function main(): Promise<void> {
         kind: 'connectRoom',
         roomId: result.roomId,
         hostToken: result.hostToken,
+        tabId,
       };
       await browser.runtime.sendMessage(connectMsg);
 
@@ -138,7 +140,7 @@ async function main(): Promise<void> {
   document.getElementById('leave-room-btn')?.addEventListener('click', async () => {
     try {
       setBusy(true);
-      const leaveMsg: ToBackgroundMessage = { kind: 'leaveRoom' };
+      const leaveMsg: ToBackgroundMessage = { kind: 'leaveRoom', tabId };
       await browser.runtime.sendMessage(leaveMsg);
       await browser.storage.session.remove([sessionKey(tabId)]);
       showCreateView(false);

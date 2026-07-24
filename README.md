@@ -92,12 +92,12 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.1` version:
+`0.1.2` version:
 
 ```sh
 git push origin master
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 When the workflow succeeds:
@@ -224,7 +224,8 @@ extension line coverage in independent jobs.
 
 ## End-to-end usage
 
-1. Open a page containing a video and choose the CoWatch toolbar button.
+1. Open a page containing a video, including a player embedded in a
+   cross-origin iframe, and choose the CoWatch toolbar button.
 2. Select open or host-only control and create a room.
 3. Copy the generated link to a second Firefox profile.
 4. Continue from the landing page to the destination video.
@@ -246,7 +247,8 @@ Known limitations:
 - DRM players and Firefox-restricted pages may prevent video control.
 - Autoplay policy can require a participant to interact with the page.
 - Site-specific players may replace their `<video>` element; CoWatch
-  re-detects candidates but cannot bypass site or browser restrictions.
+  re-detects candidates across accessible frames but cannot bypass site or
+  browser restrictions.
 - `meet.jit.si` is a development default. Jitsi does not recommend the public
   instance as the backend for production applications.
 
@@ -255,7 +257,8 @@ Known limitations:
 - Test open and host-only rooms in two clean Firefox profiles.
 - Verify create, join, fresh-link, expired, unknown, missing-token, extension
   missing, and server/network-error landing states.
-- Verify multiple-video selection and return-to-auto.
+- Verify top-page and cross-origin iframe video detection, multiple-video
+  selection, hidden-frame rejection, and return-to-auto.
 - Verify play, pause, seek, drift correction, autoplay failure, and host
   departure.
 - Verify fullscreen overlay movement and background session recovery.

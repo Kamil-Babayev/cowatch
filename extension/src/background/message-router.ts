@@ -1,5 +1,8 @@
 import type { RoomManager } from './room-manager.ts';
 import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
+import type { VideoCoordinator } from './video-coordinator.ts';
+import type { VideoSelection, VideoTabStatus } from '../shared/video-frames.ts';
+import type { SessionPayload } from '../shared/messages.ts';
 
 /**
  * Minimal surface of `browser.tabs` this router actually needs — injected
@@ -8,7 +11,11 @@ import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-me
  * the real `browser` global.
  */
 export interface TabsAPI {
-  sendMessage(tabId: number, message: ToContentMessage): void | Promise<void>;
+  sendMessage(
+    tabId: number,
+    message: ToContentMessage,
+    options?: { frameId?: number },
+  ): unknown | Promise<unknown>;
   update(tabId: number, updateProps: { url: string }): void | Promise<unknown>;
 }
 
@@ -31,14 +38,53 @@ export interface LinkMinter {
 
 export interface MessageSender {
   tab?: { id?: number };
+  frameId?: number;
+  documentId?: string;
 }
+
+type VideoRouting = Pick<
+  VideoCoordinator,
+  | 'discover'
+  | 'select'
+  | 'clearManualSelection'
+  | 'noteDocument'
+  | 'isSelected'
+  | 'sendToSelected'
+  | 'sendToTop'
+  | 'clear'
+>;
 
 export function createMessageRouter(
   roomManager: RoomManager,
   tabs: TabsAPI,
   sessionStorage: SessionStorageAPI,
   linkMinter: LinkMinter,
+  videos?: VideoRouting,
 ) {
+  const emptyStatus: VideoTabStatus = {
+    hasVideo: false,
+    candidates: [],
+    selected: null,
+  };
+  const videoRouting: VideoRouting = videos ?? {
+    discover: async () => ({ status: emptyStatus, selectionChanged: false }),
+    select: async (_tabId: number, selection: VideoSelection) => ({
+      ...emptyStatus,
+      selected: selection,
+    }),
+    clearManualSelection: async () => ({ status: emptyStatus, selectionChanged: false }),
+    noteDocument: () => undefined,
+    isSelected: () => true,
+    sendToSelected: async (tabId, message) => {
+      await tabs.sendMessage(tabId, message);
+      return true;
+    },
+    sendToTop: async (tabId, message) => {
+      await tabs.sendMessage(tabId, message);
+    },
+    clear: () => undefined,
+  };
+  const sessionPayloads = new Map<number, SessionPayload>();
   function activeSessionKey(tabId: number): string {
     return `activeSession:${tabId}`;
   }
@@ -57,12 +103,13 @@ export function createMessageRouter(
   }
 
   async function connectTab(tabId: number, roomId: string, hostToken?: string): Promise<void> {
+    await videoRouting.discover(tabId);
     const current = roomManager.getSession(tabId);
     if (
       current?.roomId === roomId
       && current.hostToken === hostToken
     ) {
-      await tabs.sendMessage(tabId, { kind: 'roomConnected', roomId });
+      await videoRouting.sendToTop(tabId, { kind: 'roomConnected', roomId });
       return;
     }
 
@@ -71,47 +118,96 @@ export function createMessageRouter(
     });
     roomManager.connect(tabId, roomId, hostToken, {
       onRemotePlayback: (event) =>
-        tabs.sendMessage(tabId, { kind: 'remotePlaybackEvent', event }),
-      onAuthoritativeState: (state, source) =>
-        tabs.sendMessage(tabId, {
+        videoRouting.sendToSelected(tabId, { kind: 'remotePlaybackEvent', event }),
+      onAuthoritativeState: (state, source) => {
+        void videoRouting.sendToTop(tabId, {
           kind: 'authoritativeState',
           currentTime: state.currentTime,
           isPlaying: state.isPlaying,
           source,
-        }),
+        });
+        return videoRouting.sendToSelected(tabId, {
+          kind: 'authoritativeState',
+          currentTime: state.currentTime,
+          isPlaying: state.isPlaying,
+          source,
+        });
+      },
       onTimeSync: (state, timestamp) =>
-        tabs.sendMessage(tabId, { kind: 'timeSync', state, timestamp }),
+        videoRouting.sendToSelected(tabId, { kind: 'timeSync', state, timestamp }),
       onControlDenied: (reason) =>
-        tabs.sendMessage(tabId, { kind: 'controlDenied', reason }),
+        videoRouting.sendToTop(tabId, { kind: 'controlDenied', reason }),
       onPresence: (payload) =>
-        tabs.sendMessage(tabId, { kind: 'presenceUpdate', payload }),
-      onSession: (payload) =>
-        tabs.sendMessage(tabId, { kind: 'sessionInfo', payload }),
+        videoRouting.sendToTop(tabId, { kind: 'presenceUpdate', payload }),
+      onSession: (payload) => {
+        sessionPayloads.set(tabId, payload);
+        void videoRouting.sendToSelected(tabId, { kind: 'sessionInfo', payload });
+        return videoRouting.sendToTop(tabId, { kind: 'sessionInfo', payload });
+      },
       onConnectionState: (state) => {
         if (state === 'error' || state === 'disconnected') {
           void clearSessionIfCurrent(tabId, roomId);
         }
-        return tabs.sendMessage(tabId, { kind: 'connectionState', state });
+        return videoRouting.sendToTop(tabId, { kind: 'connectionState', state });
       },
       onRoomClosed: (reason) => {
+        sessionPayloads.delete(tabId);
         void clearSessionIfCurrent(tabId, roomId);
-        void tabs.sendMessage(tabId, { kind: 'roomClosed', reason });
+        void videoRouting.sendToTop(tabId, { kind: 'roomClosed', reason });
       },
     });
-    await tabs.sendMessage(tabId, { kind: 'roomConnected', roomId });
+    await videoRouting.sendToTop(tabId, { kind: 'roomConnected', roomId });
   }
 
-  return async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<void> {
-    const tabId = sender.tab?.id;
+  return async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<unknown> {
+    const explicitTabId =
+      msg.kind === 'queryVideoCandidates'
+      || msg.kind === 'connectRoom'
+      || msg.kind === 'leaveRoom'
+        ? msg.tabId
+        : undefined;
+    const tabId = explicitTabId ?? sender.tab?.id;
     if (tabId == null) return; // every message this router handles is tab-scoped
 
     switch (msg.kind) {
+      case 'queryVideoCandidates':
+        return (await videoRouting.discover(tabId)).status;
+
+      case 'selectVideoCandidate':
+        return videoRouting.select(tabId, msg.selection);
+
+      case 'clearVideoSelection':
+        return (await videoRouting.clearManualSelection(tabId)).status;
+
+      case 'frameVideoCandidatesChanged': {
+        videoRouting.noteDocument(tabId, sender.frameId ?? 0, sender.documentId);
+        const result = await videoRouting.discover(tabId);
+        if (result.selectionChanged && roomManager.getSession(tabId)) {
+          const sessionPayload = sessionPayloads.get(tabId);
+          if (sessionPayload) {
+            await videoRouting.sendToSelected(tabId, {
+              kind: 'sessionInfo',
+              payload: sessionPayload,
+            });
+          }
+          roomManager.requestState(tabId);
+        }
+        return;
+      }
+
       case 'localPlaybackEvent':
+        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
         roomManager.reportLocalEvent(tabId, msg.event);
         return;
 
       case 'playbackHeartbeat':
+        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
         roomManager.reportHeartbeat(tabId, msg.state);
+        return;
+
+      case 'playbackApplyFailed':
+        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
+        await videoRouting.sendToTop(tabId, { kind: 'playbackApplyFailed' });
         return;
 
       case 'connectRoom':
@@ -120,6 +216,8 @@ export function createMessageRouter(
 
       case 'leaveRoom':
         roomManager.disconnect(tabId);
+        sessionPayloads.delete(tabId);
+        videoRouting.clear(tabId);
         await sessionStorage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);
         return;
 
@@ -135,7 +233,7 @@ export function createMessageRouter(
         return;
 
       case 'extensionInstalledCheck':
-        await tabs.sendMessage(tabId, { kind: 'extensionInstalledResponse' });
+        await videoRouting.sendToTop(tabId, { kind: 'extensionInstalledResponse' });
         return;
 
       case 'checkPendingJoin': {
@@ -147,7 +245,7 @@ export function createMessageRouter(
           | undefined;
         if (active?.roomId) {
           await connectTab(tabId, active.roomId, active.hostToken);
-          await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId: null });
+          await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId: null });
           return;
         }
         const roomId = (result[key] as string | undefined) ?? null;
@@ -156,10 +254,10 @@ export function createMessageRouter(
           // second, unrelated page load to auto-join the same room.
           await sessionStorage.remove([key]);
           await connectTab(tabId, roomId);
-          await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId: null });
+          await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId: null });
           return;
         }
-        await tabs.sendMessage(tabId, { kind: 'pendingJoinResult', roomId });
+        await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId });
         return;
       }
 
@@ -170,7 +268,7 @@ export function createMessageRouter(
           // host — distinct from a network/server failure, worth telling
           // the overlay apart so it doesn't imply "try again" for
           // something retrying won't fix.
-          await tabs.sendMessage(tabId, {
+          await videoRouting.sendToTop(tabId, {
             kind: 'freshLinkError',
             message: 'Only the host can generate a new link',
           });
@@ -178,9 +276,9 @@ export function createMessageRouter(
         }
         try {
           const result = await linkMinter.mintFreshLink(session.roomId, session.hostToken);
-          await tabs.sendMessage(tabId, { kind: 'freshLinkResult', joinUrl: result.joinUrl });
+          await videoRouting.sendToTop(tabId, { kind: 'freshLinkResult', joinUrl: result.joinUrl });
         } catch (err) {
-          await tabs.sendMessage(tabId, { kind: 'freshLinkError', message: (err as Error).message });
+          await videoRouting.sendToTop(tabId, { kind: 'freshLinkError', message: (err as Error).message });
         }
         return;
       }

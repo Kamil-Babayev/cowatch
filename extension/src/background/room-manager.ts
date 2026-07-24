@@ -125,6 +125,10 @@ export class RoomManager {
     this.send(tabId, { type: 'timeSync', payload: state, timestamp: Date.now() });
   }
 
+  requestState(tabId: number): void {
+    this.send(tabId, { type: 'stateRequest', timestamp: Date.now() });
+  }
+
   private send(tabId: number, msg: Partial<Message>): void {
     const session = this.sessions.get(tabId);
     if (!session) return;

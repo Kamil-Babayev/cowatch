@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CoWatch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sync video playback with friends on any site, plus video/voice chat.",
   "browser_specific_settings": {
     "gecko": {
@@ -15,8 +15,14 @@
   "background": {
     "scripts": ["background/index.js"]
   },
-  "permissions": ["storage", "tabs", "clipboardWrite"],
+  "permissions": ["storage", "tabs", "webNavigation", "clipboardWrite"],
   "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/frame-agent.js"],
+      "all_frames": true,
+      "match_about_blank": true
+    },
     {
       "matches": ["<all_urls>"],
       "js": ["vendor/jitsi-external-api.js", "content/index.js"]

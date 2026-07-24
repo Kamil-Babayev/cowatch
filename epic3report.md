@@ -46,3 +46,15 @@ separate.
   build, and Firefox manifest validation in independent jobs.
 - The two-profile browser checklist is maintained in the root README and must
   be completed before packaging each release.
+
+## Cross-frame detection addendum
+
+- A lightweight video agent now runs in every accessible frame while the
+  overlay, pending-join handoff, and Jitsi coordinator remain top-frame-only.
+- Script-populated `about:blank` player frames are included so lazy player
+  containers are inspected after initialization.
+- Background discovery enumerates live frames, accounts for parent iframe
+  visibility, preserves manual selection, and targets sync traffic only to
+  the selected frame/document.
+- Cross-origin embedded players are supported generically; no site-specific
+  player rules were added.
