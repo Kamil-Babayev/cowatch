@@ -1,31 +1,24 @@
-name: Package early-test extension
+name: Release Firefox extension
 
 on:
-  workflow_dispatch:
-    inputs:
-      server_base_url:
-        description: Public CoWatch origin, for example http://203.0.113.10:8080
-        required: true
-        type: string
-      jitsi_domain:
-        description: Jitsi hostname
-        required: false
-        default: meet.jit.si
-        type: string
+  push:
+    tags:
+      - "v*"
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  SERVER_BASE_URL: https://cowatch-2uvm.onrender.com
+  JITSI_DOMAIN: meet.jit.si
 
 jobs:
-  package:
-    name: Test and package Firefox extension
+  release:
+    name: Test, package, and publish Firefox extension
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: extension
-    env:
-      SERVER_BASE_URL: ${{ inputs.server_base_url }}
-      JITSI_DOMAIN: ${{ inputs.jitsi_domain }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -33,14 +26,44 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: extension/package-lock.json
+      - name: Validate tag and extension versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(node -p "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8')).version")"
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+
+          if [[ "${GITHUB_REF_NAME}" != "v${tag_version}" \
+            || "${tag_version}" != "${manifest_version}" \
+            || "${manifest_version}" != "${package_version}" ]]; then
+            echo "Version mismatch: tag=${GITHUB_REF_NAME}, manifest=${manifest_version}, package=${package_version}" >&2
+            exit 1
+          fi
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:coverage
-      - run: npm run package
-      - name: Upload unsigned Firefox ZIP
-        uses: actions/upload-artifact@v7
-        with:
-          name: cowatch-firefox-${{ github.run_number }}
-          path: extension/artifacts/*.zip
-          if-no-files-found: error
-          retention-days: 7
+      - name: Build, verify, lint, and package
+        run: npm run package
+      - name: Create or update GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_title="CoWatch ${GITHUB_REF_NAME}"
+          release_notes="Unsigned Firefox test build for ${SERVER_BASE_URL}. Load the ZIP temporarily from about:debugging#/runtime/this-firefox; Firefox removes it after restart."
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${release_title}" \
+              --notes "${release_notes}" \
+              --prerelease
+            gh release upload "${GITHUB_REF_NAME}" artifacts/*.zip --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" artifacts/*.zip \
+              --verify-tag \
+              --title "${release_title}" \
+              --notes "${release_notes}" \
+              --prerelease
+          fi

@@ -60,6 +60,59 @@ Load a production build manually from Firefox:
 3. Choose **Load Temporary Add-on**.
 4. Select `extension/dist/manifest.json`.
 
+## Hosted Render deployment
+
+The hosted server is available at
+`https://cowatch-2uvm.onrender.com`. Configure its Render Web Service with:
+
+- Root directory: `server`
+- Dockerfile path: `./Dockerfile`
+- Docker build context: `.`
+- Health check path: `/healthz`
+- `ADDR=:10000`
+- `JOIN_BASE_URL=https://cowatch-2uvm.onrender.com`
+
+After deploying or changing an environment variable, verify the public health
+endpoint:
+
+```sh
+curl https://cowatch-2uvm.onrender.com/healthz
+```
+
+`JOIN_BASE_URL` and the extension's compiled `SERVER_BASE_URL` must be the
+same origin. Render terminates HTTPS, and the extension automatically uses
+`wss://` for room WebSockets.
+
+### Package a tagged Firefox release
+
+Pushing a version tag matching `v*` runs the **Release Firefox extension**
+GitHub Actions workflow. The workflow tests the extension, builds it for the
+hosted Render origin, runs Firefox linting, and attaches the unsigned ZIP to
+a GitHub prerelease. Generated ZIP files remain outside Git history.
+
+The tag without its leading `v` must exactly match the `version` in both
+`extension/manifest.json` and `extension/package.json`. For the current
+`0.1.0` version:
+
+```sh
+git push origin master
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+When the workflow succeeds:
+
+1. Open the repository's **Releases** page and select the matching prerelease.
+2. Download the attached CoWatch ZIP.
+3. In Firefox 140+, open `about:debugging#/runtime/this-firefox`.
+4. Choose **Load Temporary Add-on** and select the downloaded ZIP.
+
+The ZIP is unsigned, so Firefox removes the temporary installation when the
+browser restarts. Permanent distribution requires Mozilla signing. If the
+server origin changes, update `JOIN_BASE_URL` on the server and
+`SERVER_BASE_URL` in `.github/workflows/package-extension.yml`, increment both
+extension version fields, and push a new matching tag.
+
 ## Public-IP early test
 
 This is a temporary two-person test setup, not a production deployment.
@@ -122,14 +175,16 @@ without NAT loopback.
 
 ### 4. Package and install the extension
 
-1. Open GitHub **Actions** → **Package early-test extension**.
-2. Choose **Run workflow**.
-3. Enter exactly `http://PUBLIC_IP:8080` for `server_base_url`.
-4. Keep `meet.jit.si` as `jitsi_domain`.
-5. Download the `cowatch-firefox-*` artifact when the workflow completes.
-6. Extract GitHub's outer artifact archive and send the inner CoWatch ZIP to
-   the other participant.
-7. In Firefox 140+, open `about:debugging#/runtime/this-firefox`, choose
+1. Build a local package with the public IP compiled into the extension:
+
+   ```sh
+   SERVER_BASE_URL=http://PUBLIC_IP:8080 \
+     JITSI_DOMAIN=meet.jit.si \
+     npm --prefix extension run package
+   ```
+
+2. Send the ZIP from `extension/artifacts/` to the other participant.
+3. In Firefox 140+, open `about:debugging#/runtime/this-firefox`, choose
    **Load Temporary Add-on**, and select the CoWatch ZIP.
 
 The unsigned extension is removed when Firefox restarts and must then be
@@ -210,4 +265,4 @@ Known limitations:
 - Review `PRIVACY.md`, the pinned Jitsi checksum, version number, and release
   notes before packaging.
 
-Production hosting and AMO submission are deliberately outside v1 completion.
+Mozilla signing and AMO submission remain outside v1 completion.
