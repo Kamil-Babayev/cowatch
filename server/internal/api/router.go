@@ -19,7 +19,7 @@ type Deps struct {
 
 // Register installs all HTTP and static routes on mux.
 func Register(mux *http.ServeMux, deps Deps) {
-	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /healthz", handleHealth(deps.BaseURL))
 	createLimiter := newRateLimiter(5, time.Minute) // 5 rooms/IP/minute
 	mux.HandleFunc("POST /rooms", rateLimitMiddleware(createLimiter, handleCreateRoom(deps)))
 	mux.HandleFunc("GET /join/{token}", handleResolveJoin(deps))

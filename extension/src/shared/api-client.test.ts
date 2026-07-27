@@ -44,7 +44,7 @@ test('createRoom posts to /rooms with the right body', async () => {
   assert.deepEqual(result, {
     roomId: 'r1',
     joinToken: 't1',
-    joinUrl: 'http://x/join-page/?token=t1',
+    joinUrl: 'http://localhost:9000/join-page/?token=t1',
     hostToken: 'h1',
   });
 });
@@ -65,10 +65,35 @@ test('mintFreshLink sends the hostToken as a Bearer header', async () => {
 
   assert.equal(lastRequest?.url, 'http://localhost:9000/rooms/room-1/tokens');
   assert.equal((lastRequest?.init?.headers as Record<string, string>)?.Authorization, 'Bearer secret-host-token');
-  assert.deepEqual(result, { joinToken: 't2', joinUrl: 'http://x/join-page/?token=t2' });
+  assert.deepEqual(result, {
+    joinToken: 't2',
+    joinUrl: 'http://localhost:9000/join-page/?token=t2',
+  });
 });
 
 test('mintFreshLink throws on a non-ok response', async () => {
   mockResponse = { ok: false, status: 401, body: {} };
   await assert.rejects(() => mintFreshLink('room-1', 'wrong-token'), /401/);
+});
+
+test('rejects successful responses without a usable join token', async () => {
+  mockResponse = {
+    ok: true,
+    status: 201,
+    body: { roomId: 'r1', joinToken: '', joinUrl: 'http://x/join-page/', hostToken: 'h1' },
+  };
+  await assert.rejects(
+    () => createRoom('https://example.com/watch', 'open'),
+    /invalid join token/,
+  );
+
+  mockResponse = {
+    ok: true,
+    status: 201,
+    body: { joinUrl: 'http://x/join-page/?token=missing' },
+  };
+  await assert.rejects(
+    () => mintFreshLink('room-1', 'secret-host-token'),
+    /invalid join token/,
+  );
 });

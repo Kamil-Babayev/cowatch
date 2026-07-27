@@ -38,6 +38,8 @@ func TestHealthAndStaticPage(t *testing.T) {
 	mux, _, _ := newTestAPI(t)
 	if rec := request(t, mux, http.MethodGet, "/healthz", "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("health status %d", rec.Code)
+	} else if got := rec.Header().Get("X-CoWatch-Join-Base-URL"); got != "http://example.test" {
+		t.Fatalf("health join base %q", got)
 	}
 	rec := request(t, mux, http.MethodGet, "/join-page/", "", nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "COWATCH") {
@@ -55,7 +57,7 @@ func TestCreateResolveAndMintRoom(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(created.JoinURL, "/join-page/?token=") {
+	if created.JoinURL != "http://example.test/join-page/?token="+created.JoinToken {
 		t.Fatalf("bad join URL %q", created.JoinURL)
 	}
 
@@ -72,6 +74,13 @@ func TestCreateResolveAndMintRoom(t *testing.T) {
 	})
 	if minted.Code != http.StatusCreated {
 		t.Fatalf("mint %d %s", minted.Code, minted.Body.String())
+	}
+	var fresh mintTokenResponse
+	if err := json.Unmarshal(minted.Body.Bytes(), &fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.JoinURL != "http://example.test/join-page/?token="+fresh.JoinToken {
+		t.Fatalf("bad fresh join URL %q", fresh.JoinURL)
 	}
 }
 

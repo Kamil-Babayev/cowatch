@@ -1,4 +1,5 @@
 import { SERVER_BASE_URL } from './config.ts';
+import { canonicalJoinUrl } from './join-url.ts';
 
 export type ControlMode = 'open' | 'host-only';
 
@@ -25,7 +26,8 @@ export async function createRoom(videoUrl: string, controlMode: ControlMode): Pr
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(`createRoom failed (${res.status}): ${body.error ?? 'unknown error'}`);
   }
-  return (await res.json()) as CreateRoomResult;
+  const result = (await res.json()) as CreateRoomResult;
+  return { ...result, joinUrl: canonicalJoinUrl(result.joinToken) };
 }
 
 /** US-2.12: mint a fresh join link for a room that already exists. */
@@ -37,5 +39,6 @@ export async function mintFreshLink(roomId: string, hostToken: string): Promise<
   if (!res.ok) {
     throw new Error(`mintFreshLink failed (${res.status})`);
   }
-  return (await res.json()) as MintTokenResult;
+  const result = (await res.json()) as MintTokenResult;
+  return { ...result, joinUrl: canonicalJoinUrl(result.joinToken) };
 }

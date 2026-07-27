@@ -76,12 +76,16 @@ After deploying or changing an environment variable, verify the public health
 endpoint:
 
 ```sh
-curl https://cowatch-2uvm.onrender.com/healthz
+curl -i https://cowatch-2uvm.onrender.com/healthz
 ```
 
 `JOIN_BASE_URL` and the extension's compiled `SERVER_BASE_URL` must be the
 same origin. Render terminates HTTPS, and the extension automatically uses
-`wss://` for room WebSockets.
+`wss://` for room WebSockets. The health response must include:
+
+```text
+X-CoWatch-Join-Base-URL: https://cowatch-2uvm.onrender.com
+```
 
 ### Package a tagged Firefox release
 
@@ -92,12 +96,12 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.2` version:
+`0.1.3` version:
 
 ```sh
 git push origin master
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 When the workflow succeeds:
@@ -112,6 +116,11 @@ browser restarts. Permanent distribution requires Mozilla signing. If the
 server origin changes, update `JOIN_BASE_URL` on the server and
 `SERVER_BASE_URL` in `.github/workflows/package-extension.yml`, increment both
 extension version fields, and push a new matching tag.
+
+The extension canonicalizes returned and cached invite links against its
+compiled `SERVER_BASE_URL`. This prevents a stale server hostname from being
+copied, but Render's `JOIN_BASE_URL` must still be correct for every API
+client and should be confirmed through `/healthz`.
 
 ## Public-IP early test
 

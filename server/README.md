@@ -32,7 +32,8 @@ From the repository root, the equivalent Make targets are `go-run`,
 
 The complete machine-readable contract is in [openapi.yaml](openapi.yaml).
 
-- `GET /healthz` returns service health.
+- `GET /healthz` returns service health and exposes the configured public
+  origin in `X-CoWatch-Join-Base-URL`.
 - `POST /rooms` creates a room from `videoUrl` and `controlMode`.
 - `GET /join/{token}` resolves a valid token, returning `410` for an expired
   token and `404` for an unknown token.

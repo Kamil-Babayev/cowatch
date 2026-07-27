@@ -1,14 +1,12 @@
 import { createRoom, mintFreshLink, type ControlMode } from '../shared/api-client.ts';
 import type { ToBackgroundMessage } from '../shared/runtime-messages.ts';
 import { detectPopupVideoStatus } from './video-status.ts';
+import {
+  canonicalizeStoredSession,
+  type StoredSession,
+} from './stored-session.ts';
 
 console.log('[CoWatch] popup loaded');
-
-interface StoredSession {
-  roomId: string;
-  hostToken: string;
-  joinUrl: string;
-}
 
 function sessionKey(tabId: number): string {
   return `hostSession:${tabId}`;
@@ -53,7 +51,19 @@ async function main(): Promise<void> {
   const tabId = tab.id as number;
 
   const stored = await browser.storage.session.get([sessionKey(tabId)]);
-  const existing = stored[sessionKey(tabId)] as StoredSession | undefined;
+  let existing = stored[sessionKey(tabId)] as StoredSession | undefined;
+  let storedSessionError = '';
+
+  if (existing) {
+    try {
+      existing = canonicalizeStoredSession(existing);
+      await browser.storage.session.set({ [sessionKey(tabId)]: existing });
+    } catch {
+      await browser.storage.session.remove([sessionKey(tabId)]);
+      existing = undefined;
+      storedSessionError = 'Saved room link was invalid. Create a new room.';
+    }
+  }
 
   if (existing) {
     const connectMsg: ToBackgroundMessage = {
@@ -77,6 +87,7 @@ async function main(): Promise<void> {
       setStatus('CoWatch could not inspect this tab. Reload it and try again.');
     } else {
       showCreateView(videoStatus === 'no-video');
+      if (storedSessionError) setStatus(storedSessionError);
     }
   }
 
@@ -90,6 +101,7 @@ async function main(): Promise<void> {
       const session: StoredSession = {
         roomId: result.roomId,
         hostToken: result.hostToken,
+        joinToken: result.joinToken,
         joinUrl: result.joinUrl,
       };
       await browser.storage.session.set({ [sessionKey(tabId)]: session });
@@ -126,7 +138,11 @@ async function main(): Promise<void> {
       const fresh = await mintFreshLink(session.roomId, session.hostToken);
       await navigator.clipboard.writeText(fresh.joinUrl);
 
-      const updated: StoredSession = { ...session, joinUrl: fresh.joinUrl };
+      const updated: StoredSession = {
+        ...session,
+        joinToken: fresh.joinToken,
+        joinUrl: fresh.joinUrl,
+      };
       await browser.storage.session.set({ [sessionKey(tabId)]: updated });
       showRoomView(fresh.joinUrl);
       setStatus('Copied!');

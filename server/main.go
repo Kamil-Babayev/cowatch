@@ -40,7 +40,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("listening on %s", cfg.Addr)
+		log.Printf("listening on %s with public join base %s", cfg.Addr, cfg.JoinBaseURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
