@@ -2,11 +2,15 @@ import type { PlaybackEvent } from '../content/playback-events.ts';
 import type { PresencePayload } from './messages.ts';
 import type { PlaybackPayload, SessionPayload } from './messages.ts';
 import type { VideoSelection } from './video-frames.ts';
+import type { AuthoritativePlayerState, PlayerEvent, PlayerSnapshot } from './player.ts';
 
 /** Content script -> background */
 export type ToBackgroundMessage =
   | { kind: 'localPlaybackEvent'; event: PlaybackEvent }
   | { kind: 'playbackHeartbeat'; state: PlaybackPayload }
+  | { kind: 'localPlayerEvent'; event: PlayerEvent }
+  | { kind: 'playerHeartbeat'; state: PlayerSnapshot }
+  | { kind: 'playerAdapterStatus'; status: string; message?: string }
   | { kind: 'playbackApplyFailed' }
   | { kind: 'frameVideoCandidatesChanged' }
   | { kind: 'queryVideoCandidates'; tabId?: number }
@@ -47,10 +51,12 @@ export type ToContentMessage =
       source: 'join' | 'control-denied';
     }
   | { kind: 'timeSync'; state: PlaybackPayload; timestamp: number }
+  | { kind: 'applyPlayerState'; state: AuthoritativePlayerState }
   | { kind: 'controlDenied'; reason: string }
   | { kind: 'presenceUpdate'; payload: PresencePayload }
   | { kind: 'sessionInfo'; payload: SessionPayload }
-  | { kind: 'connectionState'; state: 'connecting' | 'connected' | 'disconnected' | 'error' }
+  | { kind: 'connectionState'; state: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' }
+  | { kind: 'playerAdapterStatus'; status: string; message?: string }
   | { kind: 'roomClosed'; reason: 'host-left' | 'server-shutdown' }
   | { kind: 'extensionInstalledResponse' } // reply to extensionInstalledCheck
   | { kind: 'pendingJoinResult'; roomId: string | null } // reply to checkPendingJoin

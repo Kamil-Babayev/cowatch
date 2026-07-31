@@ -8,12 +8,14 @@ import (
 
 // Hub tracks active clients by room and routes server messages.
 type Hub struct {
-	mu          sync.RWMutex
-	rooms       map[string]map[*client]struct{}
-	OnRoomEmpty func(roomID string) // called after the last connection in a room leaves
+	mu              sync.RWMutex
+	rooms           map[string]map[*client]struct{}
+	hostGrace       map[string]*time.Timer
+	hostGracePeriod time.Duration
+	OnRoomEmpty     func(roomID string) // called after the last connection in a room leaves
 }
 
-func (h *Hub) leave(c *client) {
+func (h *Hub) leave(c *client, explicit bool) {
 	h.mu.Lock()
 	members, exists := h.rooms[c.roomID]
 	if !exists {
@@ -22,38 +24,71 @@ func (h *Hub) leave(c *client) {
 	}
 	delete(members, c)
 	empty := len(members) == 0
-	hostLeft := c.isHost
-	var remaining []*client
-	if hostLeft {
-		remaining = make([]*client, 0, len(members))
-		for member := range members {
-			remaining = append(remaining, member)
+	hostStillPresent := false
+	for member := range members {
+		if member.isHost {
+			hostStillPresent = true
+			break
 		}
 	}
-	if empty || hostLeft {
+	if c.isHost && explicit {
+		remaining := clientsFromMembers(members)
 		delete(h.rooms, c.roomID)
-	}
-	h.mu.Unlock()
-
-	if empty || hostLeft {
+		if timer := h.hostGrace[c.roomID]; timer != nil {
+			timer.Stop()
+			delete(h.hostGrace, c.roomID)
+		}
+		h.mu.Unlock()
 		if h.OnRoomEmpty != nil {
 			h.OnRoomEmpty(c.roomID)
 		}
-		if hostLeft {
-			h.closeClients(remaining, "host-left")
+		h.closeClients(remaining, "host-left")
+		return
+	}
+	if c.isHost && !hostStillPresent {
+		if old := h.hostGrace[c.roomID]; old != nil {
+			old.Stop()
+		}
+		var timer *time.Timer
+		timer = time.AfterFunc(h.hostGracePeriod, func() { h.expireHostGrace(c.roomID, timer) })
+		h.hostGrace[c.roomID] = timer
+		h.mu.Unlock()
+		h.broadcastPresence(c.roomID)
+		return
+	}
+	if empty && h.hostGrace[c.roomID] == nil {
+		delete(h.rooms, c.roomID)
+		h.mu.Unlock()
+		if h.OnRoomEmpty != nil {
+			h.OnRoomEmpty(c.roomID)
 		}
 		return
 	}
+	h.mu.Unlock()
 	h.broadcastPresence(c.roomID)
 }
 
 // NewHub creates an empty WebSocket hub.
 func NewHub() *Hub {
-	return &Hub{rooms: make(map[string]map[*client]struct{})}
+	return NewHubWithHostGrace(30 * time.Second)
+}
+
+func NewHubWithHostGrace(period time.Duration) *Hub {
+	return &Hub{
+		rooms:           make(map[string]map[*client]struct{}),
+		hostGrace:       make(map[string]*time.Timer),
+		hostGracePeriod: period,
+	}
 }
 
 func (h *Hub) join(c *client) {
 	h.mu.Lock()
+	if c.isHost {
+		if timer := h.hostGrace[c.roomID]; timer != nil {
+			timer.Stop()
+			delete(h.hostGrace, c.roomID)
+		}
+	}
 	if h.rooms[c.roomID] == nil {
 		h.rooms[c.roomID] = make(map[*client]struct{})
 	}
@@ -61,6 +96,37 @@ func (h *Hub) join(c *client) {
 	h.mu.Unlock()
 
 	h.broadcastPresence(c.roomID)
+}
+
+func clientsFromMembers(members map[*client]struct{}) []*client {
+	clients := make([]*client, 0, len(members))
+	for member := range members {
+		clients = append(clients, member)
+	}
+	return clients
+}
+
+func (h *Hub) expireHostGrace(roomID string, expected *time.Timer) {
+	h.mu.Lock()
+	if h.hostGrace[roomID] != expected {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.hostGrace, roomID)
+	members := h.rooms[roomID]
+	for member := range members {
+		if member.isHost {
+			h.mu.Unlock()
+			return
+		}
+	}
+	clients := clientsFromMembers(members)
+	delete(h.rooms, roomID)
+	h.mu.Unlock()
+	if h.OnRoomEmpty != nil {
+		h.OnRoomEmpty(roomID)
+	}
+	h.closeClients(clients, "host-left")
 }
 
 func (h *Hub) broadcast(roomID string, msg Message, exclude *client) {
@@ -122,6 +188,10 @@ func (h *Hub) CloseAll(reason string) {
 	h.mu.Lock()
 	rooms := h.rooms
 	h.rooms = make(map[string]map[*client]struct{})
+	for roomID, timer := range h.hostGrace {
+		timer.Stop()
+		delete(h.hostGrace, roomID)
+	}
 	h.mu.Unlock()
 
 	allClients := make([]*client, 0)

@@ -44,6 +44,7 @@ function makeFakeTabs(): TabsAPI & { sent: unknown[]; updated: unknown[] } {
     update: (tabId, props) => {
       updated.push({ tabId, props });
     },
+    get: async () => ({ url: 'https://example.com/watch' }),
   };
 }
 
@@ -205,13 +206,20 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
   callbacks.onRemotePlayback({ type: 'pause', currentTime: 1, isPlaying: false });
   callbacks.onAuthoritativeState({ currentTime: 12, isPlaying: true }, 'join');
   callbacks.onTimeSync({ currentTime: 13, isPlaying: true }, 99);
+  await callbacks.onPlayerState({
+    revision: 1,
+    source: { pageUrl: 'https://example.com/watch', provider: 'native', mediaKey: 'https://cdn.example/video.mp4' },
+    position: 13,
+    status: 'playing',
+    timestamp: 100,
+  });
   callbacks.onControlDenied('host-only room');
   callbacks.onPresence({ connections: [] });
   callbacks.onSession({ connectionId: 'me', isHost: true, controlMode: 'open' });
 
   // Authoritative state and session information are delivered both to the
   // top-frame UI and to the selected player frame.
-  assert.equal(tabs.sent.length, 9);
+  assert.equal(tabs.sent.length, 10);
   assert.deepEqual(tabs.sent[1], {
     tabId: 7,
     message: { kind: 'remotePlaybackEvent', event: { type: 'pause', currentTime: 1, isPlaying: false } },
@@ -225,10 +233,29 @@ test('connectRoom wires callbacks that route back to the same tab', async () => 
       source: 'join',
     },
   });
-  assert.deepEqual(tabs.sent[5], {
+  assert.deepEqual(tabs.sent[6], {
     tabId: 7,
     message: { kind: 'controlDenied', reason: 'host-only room' },
   });
+});
+
+test('authoritative source navigation preserves the room and updates the tab', async () => {
+  const roomManager = makeFakeRoomManager();
+  const tabs = makeFakeTabs();
+  tabs.get = async () => ({ url: 'https://example.com/old' });
+  const storage = makeFakeSessionStorage();
+  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
+  await handle({ kind: 'connectRoom', roomId: 'room-source' }, { tab: { id: 17 } });
+  const callbacks = roomManager.calls[0].args[3] as Record<string, (...args: any[]) => Promise<void>>;
+  await callbacks.onPlayerState({
+    revision: 2,
+    source: { pageUrl: 'https://example.com/new', provider: 'native', mediaKey: 'https://cdn.example/new.mp4' },
+    position: 0,
+    status: 'paused',
+    timestamp: Date.now(),
+  });
+  assert.deepEqual(tabs.updated, [{ tabId: 17, props: { url: 'https://example.com/new' } }]);
+  assert.deepEqual(storage.stored['activeSession:17'], { roomId: 'room-source', hostToken: undefined });
 });
 
 test('connectRoom reuses an identical live session instead of closing the host socket', async () => {
@@ -279,7 +306,7 @@ test('leaveRoom disconnects the right tab', async () => {
 
   await handle({ kind: 'leaveRoom' }, { tab: { id: 99 } });
 
-  assert.deepEqual(roomManager.calls, [{ method: 'disconnect', args: [99] }]);
+  assert.deepEqual(roomManager.calls, [{ method: 'disconnect', args: [99, true] }]);
 });
 
 test('extensionInstalledCheck replies on the same tab', async () => {
@@ -309,7 +336,7 @@ test('checkPendingJoin returns the stored roomId and clears it after reading', a
   assert.equal(storage.stored['pendingRoomId:11'], undefined);
 });
 
-test('checkPendingJoin restores an active session and clears it after disconnect', async () => {
+test('checkPendingJoin preserves an active session during a recoverable disconnect', async () => {
   const roomManager = makeFakeRoomManager();
   const tabs = makeFakeTabs();
   const storage = makeFakeSessionStorage();
@@ -340,8 +367,11 @@ test('checkPendingJoin restores an active session and clears it after disconnect
   await Promise.resolve();
   await Promise.resolve();
 
-  assert.equal(storage.stored['activeSession:13'], undefined);
-  assert.equal(storage.stored['hostSession:13'], undefined);
+  assert.deepEqual(storage.stored['activeSession:13'], {
+    roomId: 'room-restored',
+    hostToken: 'host-restored',
+  });
+  assert.deepEqual(storage.stored['hostSession:13'], { roomId: 'room-restored' });
   assert.deepEqual(tabs.sent.at(-1), {
     tabId: 13,
     message: { kind: 'connectionState', state: 'disconnected' },

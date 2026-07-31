@@ -19,6 +19,20 @@ type PlaybackState struct {
 	UpdatedAt   int64 // unix millis — when this state was true, not when it was read
 }
 
+type MediaSource struct {
+	PageURL  string
+	Provider string
+	MediaKey string
+}
+
+type PlayerState struct {
+	Revision  uint64
+	Source    MediaSource
+	Position  float64
+	Status    string
+	UpdatedAt int64
+}
+
 // Room contains the ephemeral configuration and state for a watch party.
 type Room struct {
 	ID             string
@@ -27,6 +41,7 @@ type Room struct {
 	CreatedAt      time.Time
 	HostToken      string
 	LastKnownState *PlaybackState
+	PlayerState    *PlayerState
 }
 
 // RoomStore safely stores active rooms in memory.
@@ -97,4 +112,41 @@ func (s *RoomStore) PlaybackState(roomID string) (PlaybackState, bool) {
 		return PlaybackState{}, false
 	}
 	return *room.LastKnownState, true
+}
+
+func (s *RoomStore) ApplyPlayerState(roomID string, baseRevision uint64, next PlayerState) (PlayerState, bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room, ok := s.rooms[roomID]
+	if !ok {
+		return PlayerState{}, false, false
+	}
+	currentRevision := uint64(0)
+	if room.PlayerState != nil {
+		currentRevision = room.PlayerState.Revision
+	}
+	if baseRevision != currentRevision {
+		if room.PlayerState == nil {
+			return PlayerState{}, true, false
+		}
+		return *room.PlayerState, true, false
+	}
+	next.Revision = currentRevision + 1
+	room.PlayerState = &next
+	room.LastKnownState = &PlaybackState{
+		CurrentTime: next.Position,
+		IsPlaying:   next.Status == "playing",
+		UpdatedAt:   next.UpdatedAt,
+	}
+	return next, true, true
+}
+
+func (s *RoomStore) CurrentPlayerState(roomID string) (PlayerState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	room, ok := s.rooms[roomID]
+	if !ok || room.PlayerState == nil {
+		return PlayerState{}, false
+	}
+	return *room.PlayerState, true
 }

@@ -1,6 +1,7 @@
 export type PopupVideoStatus =
   | 'available'
   | 'no-video'
+  | 'unsupported-player'
   | 'restricted'
   | 'unreachable';
 
@@ -30,8 +31,9 @@ export async function detectPopupVideoStatus(
     const result = (await sendMessage(tabId, {
       kind: 'queryVideoCandidates',
       tabId,
-    })) as { hasVideo?: boolean };
-    return result.hasVideo ? 'available' : 'no-video';
+    })) as { hasVideo?: boolean; unsupportedReason?: string };
+    if (result.hasVideo) return 'available';
+    return result.unsupportedReason ? 'unsupported-player' : 'no-video';
   } catch {
     return 'unreachable';
   }

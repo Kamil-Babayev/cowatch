@@ -7,3 +7,11 @@ export const SERVER_BASE_URL =
     : 'http://localhost:8080';
 export const JITSI_DOMAIN =
   typeof __JITSI_DOMAIN__ === 'string' ? __JITSI_DOMAIN__ : 'meet.jit.si';
+export const COWATCH_DEBUG =
+  typeof __COWATCH_DEBUG__ === 'boolean' ? __COWATCH_DEBUG__ : false;
+
+export function debugLog(message: string, details?: unknown): void {
+  if (!COWATCH_DEBUG) return;
+  if (details === undefined) console.debug(`[CoWatch debug] ${message}`);
+  else console.debug(`[CoWatch debug] ${message}`, details);
+}

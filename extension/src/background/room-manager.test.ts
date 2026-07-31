@@ -33,6 +33,7 @@ function makeCallbacks(): RoomManagerCallbacks & {
     onRemotePlayback: (e) => remoteEvents.push(e),
     onAuthoritativeState: (state, source) => authoritativeStates.push({ state, source }),
     onTimeSync: (state, timestamp) => timeSyncs.push({ state, timestamp }),
+    onPlayerState: (state) => authoritativeStates.push({ state, source: 'player' }),
     onControlDenied: (r) => denials.push(r),
     onPresence: (p) => presences.push(p),
     onSession: () => undefined,
@@ -241,4 +242,76 @@ test('disconnect is idempotent and stops delivering messages after', async () =>
   manager.disconnect(8); // second call should not throw
 
   assert.ok(true);
+});
+
+test('revisioned player events use the latest server revision', async () => {
+  const manager = new RoomManager([10], () => 0.5);
+  const cb = makeCallbacks();
+  manager.connect(9, 'room-9', 'host-token', cb);
+  const socket = await waitForServerSocket();
+  socket.send(JSON.stringify({
+    type: 'session',
+    payload: { connectionId: 'host', isHost: true, controlMode: 'open' },
+    timestamp: Date.now(),
+  }));
+  socket.send(JSON.stringify({
+    type: 'playerState',
+    payload: {
+      revision: 3,
+      source: { pageUrl: 'https://watch.example/movie', provider: 'obrut', mediaKey: 'https://a.obrut.show/e' },
+      position: 20,
+      status: 'playing',
+    },
+    timestamp: Date.now(),
+  }));
+  await waitForCondition(
+    () => cb.authoritativeStates.some((item) => (item as { source: string }).source === 'player'),
+    'timed out waiting for player state',
+  );
+  manager.reportPlayerEvent(9, {
+    action: 'pause',
+    source: { pageUrl: 'https://frame.example', provider: 'obrut', mediaKey: 'https://a.obrut.show/e' },
+    position: 21,
+    status: 'paused',
+  }, 'https://watch.example/movie');
+  await waitForCondition(
+    () => serverReceived.some((item) => (item as { type: string }).type === 'playerCommand'),
+    'timed out waiting for playerCommand',
+  );
+  const command = serverReceived.find((item) => (item as { type: string }).type === 'playerCommand') as {
+    payload: { baseRevision: number; source: { pageUrl: string }; action: string };
+  };
+  assert.equal(command.payload.baseRevision, 3);
+  assert.equal(command.payload.source.pageUrl, 'https://watch.example/movie');
+  assert.equal(command.payload.action, 'pause');
+  manager.disconnect(9);
+});
+
+test('unexpected socket closure reconnects and requests authoritative state', async () => {
+  const manager = new RoomManager([10], () => 0.5);
+  const cb = makeCallbacks();
+  manager.connect(10, 'room-reconnect', undefined, cb);
+  const first = await waitForServerSocket();
+  await waitForCondition(() => cb.connectionStates.includes('connected'), 'first socket did not connect');
+  first.terminate();
+  await waitForCondition(() => cb.connectionStates.includes('reconnecting'), 'reconnecting state missing');
+  await waitForCondition(() => serverSockets.length >= 2, 'replacement socket did not connect');
+  await waitForCondition(
+    () => serverReceived.filter((item) => (item as { type: string }).type === 'stateRequest').length >= 2,
+    'replacement connection did not request state',
+  );
+  manager.disconnect(10);
+});
+
+test('explicit disconnect tells the server this is not a recoverable drop', async () => {
+  const manager = new RoomManager();
+  const cb = makeCallbacks();
+  manager.connect(11, 'room-leave', 'host-token', cb);
+  await waitForServerSocket();
+  await waitForCondition(() => cb.connectionStates.includes('connected'), 'socket did not connect');
+  manager.disconnect(11, true);
+  await waitForCondition(
+    () => serverReceived.some((item) => (item as { type: string }).type === 'leaveRoom'),
+    'leaveRoom was not sent',
+  );
 });

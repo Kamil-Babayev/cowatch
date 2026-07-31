@@ -5,6 +5,8 @@ export interface LocalVideoCandidate {
   visibleArea: number;
   currentTime: number;
   isPlaying: boolean;
+  provider?: 'native' | 'obrut';
+  playerStatus?: string;
 }
 
 export interface ChildFrameVisibility {
@@ -15,6 +17,7 @@ export interface ChildFrameVisibility {
 export interface FrameVideoStatus {
   candidates: LocalVideoCandidate[];
   childFrames: ChildFrameVisibility[];
+  unsupportedReason?: string;
 }
 
 export interface VideoCandidate extends LocalVideoCandidate {
@@ -34,4 +37,5 @@ export interface VideoTabStatus {
   hasVideo: boolean;
   candidates: VideoCandidate[];
   selected: VideoSelection | null;
+  unsupportedReason?: string;
 }

@@ -1,5 +1,5 @@
 import { SERVER_BASE_URL } from '../shared/config.ts';
-import type { Message, PresencePayload } from '../shared/messages.ts';
+import type { Message } from '../shared/messages.ts';
 
 function wsURLForRoom(roomId: string, hostToken?: string): string {
   const url = new URL(SERVER_BASE_URL);
@@ -28,8 +28,8 @@ export type RoomConnectionStateHandler = (
 ) => void;
 
 // Given a roomId (and optional hostToken), opens a WebSocket to the room
-// server. Always logs to console (useful for manual dev testing, per this
-// story's own "testable against a room created via curl" scope);
+// server. Lifecycle transitions and actionable failures are logged, while
+// high-frequency protocol traffic stays quiet in production;
 // `onMessage`, if provided, is how anything built on top of this actually
 // reacts to messages — added now rather than retrofitted once US-2.6
 // needs it, since changing this function's signature after callers exist
@@ -55,13 +55,6 @@ export function connectToRoom(
     } catch (err) {
       console.error('[CoWatch] malformed message from server:', event.data, err);
       return;
-    }
-
-    if (msg.type === 'presence') {
-      const payload = msg.payload as PresencePayload;
-      console.log('[CoWatch] presence update:', payload.connections);
-    } else {
-      console.log('[CoWatch] message:', msg.type, msg.payload);
     }
 
     onMessage?.(msg);

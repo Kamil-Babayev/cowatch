@@ -11,6 +11,7 @@ permissions:
 env:
   SERVER_BASE_URL: https://cowatch-2uvm.onrender.com
   JITSI_DOMAIN: meet.jit.si
+  COWATCH_DEBUG: "1"
 
 jobs:
   release:
@@ -52,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           release_title="CoWatch ${GITHUB_REF_NAME}"
-          release_notes="Unsigned Firefox test build for ${SERVER_BASE_URL}. Load the ZIP temporarily from about:debugging#/runtime/this-firefox; Firefox removes it after restart."
+          release_notes="Unsigned Firefox Phase 1 diagnostic build for ${SERVER_BASE_URL}. Debug frame and obrut handshake logs are enabled. Load the ZIP temporarily from about:debugging#/runtime/this-firefox; Firefox removes it after restart."
 
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release edit "${GITHUB_REF_NAME}" \

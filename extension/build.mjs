@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { loadBuildConfig } from './build-config.mjs';
 
 const watch = process.argv.includes('--watch');
+const debug = process.env.COWATCH_DEBUG === '1';
 
 // The one place SERVER_BASE_URL is decided for a given build — swapped via
 // env var at build time (`SERVER_BASE_URL=https://cowatch.app npm run build`),
@@ -66,6 +67,7 @@ const buildOptions = {
     // and esbuild agree on what it is.
     '__SERVER_BASE_URL__': JSON.stringify(serverBaseURL),
     '__JITSI_DOMAIN__': JSON.stringify(jitsiDomain),
+    '__COWATCH_DEBUG__': JSON.stringify(debug),
   },
   loader: {
     // US-3.2: the in-page overlay lives in a shadow root, which manifest

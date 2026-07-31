@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,8 +26,9 @@ type client struct {
 }
 
 func (c *client) readLoop(hub *Hub) {
+	explicitLeave := false
 	defer func() {
-		hub.leave(c)
+		hub.leave(c, explicitLeave)
 		c.finish()
 	}()
 
@@ -44,7 +47,16 @@ func (c *client) readLoop(hub *Hub) {
 		}
 
 		switch msg.Type {
+		case MsgLeaveRoom:
+			explicitLeave = true
+			return
+
 		case MsgStateRequest:
+			if state, ok := c.rooms.CurrentPlayerState(c.roomID); ok {
+				payload, _ := json.Marshal(stateResponseFromPlayerState(state))
+				hub.sendTo(c, Message{Type: MsgStateResponse, Payload: payload, Timestamp: state.UpdatedAt})
+				continue
+			}
 			state, ok := c.rooms.PlaybackState(c.roomID)
 			if !ok {
 				// First person in the room — nothing cached yet. Their
@@ -62,6 +74,12 @@ func (c *client) readLoop(hub *Hub) {
 				// computes elapsed time since this timestamp.
 				Timestamp: state.UpdatedAt,
 			})
+
+		case MsgPlayerCommand:
+			c.handlePlayerCommand(hub, msg)
+
+		case MsgPlayerHeartbeat:
+			c.handlePlayerHeartbeat(hub, msg)
 
 		case MsgPlay, MsgPause, MsgSeeked, MsgTimeSync:
 			room, ok := c.rooms.Get(c.roomID)
@@ -105,6 +123,140 @@ func (c *client) readLoop(hub *Hub) {
 			log.Printf("ws: unknown message type %q from %s", msg.Type, c.id)
 		}
 	}
+}
+
+func validPlayerStatus(status string) bool {
+	switch status {
+	case "playing", "paused", "buffering", "ended":
+		return true
+	default:
+		return false
+	}
+}
+
+func validMediaSource(source MediaSourcePayload) bool {
+	if source.Provider != "native" && source.Provider != "obrut" {
+		return false
+	}
+	pageURL, err := url.Parse(source.PageURL)
+	if err != nil || (pageURL.Scheme != "http" && pageURL.Scheme != "https") || pageURL.Host == "" || source.MediaKey == "" {
+		return false
+	}
+	mediaURL, err := url.Parse(source.MediaKey)
+	if err != nil || (mediaURL.Scheme != "http" && mediaURL.Scheme != "https") || mediaURL.Host == "" {
+		return false
+	}
+	if source.Provider == "obrut" {
+		host := strings.ToLower(mediaURL.Hostname())
+		return host == "obrut.show" || strings.HasSuffix(host, ".obrut.show")
+	}
+	return true
+}
+
+func stateResponseFromPlayerState(state store.PlayerState) StateResponsePayload {
+	source := MediaSourcePayload{
+		PageURL: state.Source.PageURL, Provider: state.Source.Provider, MediaKey: state.Source.MediaKey,
+	}
+	return StateResponsePayload{
+		CurrentTime: state.Position,
+		IsPlaying:   state.Status == "playing",
+		Revision:    state.Revision,
+		Source:      &source,
+		Position:    state.Position,
+		Status:      state.Status,
+	}
+}
+
+func playerStatePayload(state store.PlayerState, commandID string) PlayerStatePayload {
+	return PlayerStatePayload{
+		Revision: state.Revision,
+		Source: MediaSourcePayload{
+			PageURL: state.Source.PageURL, Provider: state.Source.Provider, MediaKey: state.Source.MediaKey,
+		},
+		Position:  state.Position,
+		Status:    state.Status,
+		CommandID: commandID,
+	}
+}
+
+func (c *client) sendCurrentPlayerState(hub *Hub) {
+	state, ok := c.rooms.CurrentPlayerState(c.roomID)
+	if !ok {
+		return
+	}
+	payload, _ := json.Marshal(stateResponseFromPlayerState(state))
+	hub.sendTo(c, Message{Type: MsgStateResponse, Payload: payload, Timestamp: state.UpdatedAt})
+}
+
+func (c *client) handlePlayerCommand(hub *Hub, msg Message) {
+	room, ok := c.rooms.Get(c.roomID)
+	if !ok {
+		return
+	}
+	var command PlayerCommandPayload
+	if err := json.Unmarshal(msg.Payload, &command); err != nil || command.CommandID == "" ||
+		math.IsNaN(command.Position) || math.IsInf(command.Position, 0) || command.Position < 0 ||
+		!validMediaSource(command.Source) {
+		log.Printf("ws: invalid playerCommand from %s", c.id)
+		return
+	}
+	if command.Action != "play" && command.Action != "pause" && command.Action != "seek" && command.Action != "replace" {
+		return
+	}
+	if (command.Action == "replace" && !c.isHost) ||
+		(room.ControlMode == store.ControlModeHostOnly && !c.isHost) {
+		payload, _ := json.Marshal(ControlDeniedPayload{Reason: "host controls this action"})
+		hub.sendTo(c, Message{Type: MsgControlDenied, Payload: payload, Timestamp: time.Now().UnixMilli()})
+		return
+	}
+	status := "paused"
+	if current, exists := c.rooms.CurrentPlayerState(c.roomID); exists {
+		status = current.Status
+	}
+	switch command.Action {
+	case "play":
+		status = "playing"
+	case "pause", "replace":
+		status = "paused"
+	}
+	now := time.Now().UnixMilli()
+	state, _, applied := c.rooms.ApplyPlayerState(c.roomID, command.BaseRevision, store.PlayerState{
+		Source:    store.MediaSource{PageURL: command.Source.PageURL, Provider: command.Source.Provider, MediaKey: command.Source.MediaKey},
+		Position:  command.Position,
+		Status:    status,
+		UpdatedAt: now,
+	})
+	if !applied {
+		c.sendCurrentPlayerState(hub)
+		return
+	}
+	payload, _ := json.Marshal(playerStatePayload(state, command.CommandID))
+	hub.broadcast(c.roomID, Message{Type: MsgPlayerState, Payload: payload, Timestamp: now}, nil)
+}
+
+func (c *client) handlePlayerHeartbeat(hub *Hub, msg Message) {
+	if !c.isHost {
+		return
+	}
+	var heartbeat PlayerHeartbeatPayload
+	if err := json.Unmarshal(msg.Payload, &heartbeat); err != nil ||
+		math.IsNaN(heartbeat.Position) || math.IsInf(heartbeat.Position, 0) || heartbeat.Position < 0 ||
+		!validMediaSource(heartbeat.Source) || !validPlayerStatus(heartbeat.Status) {
+		return
+	}
+	now := time.Now().UnixMilli()
+	state, _, applied := c.rooms.ApplyPlayerState(c.roomID, heartbeat.BaseRevision, store.PlayerState{
+		Source:    store.MediaSource{PageURL: heartbeat.Source.PageURL, Provider: heartbeat.Source.Provider, MediaKey: heartbeat.Source.MediaKey},
+		Position:  heartbeat.Position,
+		Status:    heartbeat.Status,
+		UpdatedAt: now,
+	})
+	if !applied {
+		c.sendCurrentPlayerState(hub)
+		return
+	}
+	payload, _ := json.Marshal(playerStatePayload(state, ""))
+	hub.broadcast(c.roomID, Message{Type: MsgPlayerState, Payload: payload, Timestamp: now}, nil)
 }
 
 func (c *client) writeLoop() {

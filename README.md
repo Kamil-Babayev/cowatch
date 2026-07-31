@@ -96,12 +96,12 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.3` version:
+`0.1.4` Phase 1 diagnostic version:
 
 ```sh
 git push origin master
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 When the workflow succeeds:
@@ -112,7 +112,9 @@ When the workflow succeeds:
 4. Choose **Load Temporary Add-on** and select the downloaded ZIP.
 
 The ZIP is unsigned, so Firefox removes the temporary installation when the
-browser restarts. Permanent distribution requires Mozilla signing. If the
+browser restarts. The `v0.1.4` test workflow enables `[CoWatch debug]` frame
+and obrut handshake logs for playback acceptance testing. Permanent
+distribution requires Mozilla signing. If the
 server origin changes, update `JOIN_BASE_URL` on the server and
 `SERVER_BASE_URL` in `.github/workflows/package-extension.yml`, increment both
 extension version fields, and push a new matching tag.

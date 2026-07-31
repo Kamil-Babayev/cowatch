@@ -16,6 +16,7 @@ const tabsAdapter: TabsAPI = {
   sendMessage: (tabId, message, options) =>
     browser.tabs.sendMessage(tabId, message, options),
   update: (tabId, props) => browser.tabs.update(tabId, props),
+  get: (tabId) => browser.tabs.get(tabId),
 };
 
 const sessionStorageAdapter: SessionStorageAPI = {

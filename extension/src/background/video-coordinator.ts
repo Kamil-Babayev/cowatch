@@ -92,6 +92,7 @@ export class VideoCoordinator {
         .map((item) => [item.frame.frameId, item]),
     );
     const liveCandidates: VideoCandidate[] = [];
+    const unsupportedReason = responses.find((item) => item?.status.unsupportedReason)?.status.unsupportedReason;
 
     for (const item of responseByFrame.values()) {
       for (const candidate of item.status.candidates) {
@@ -168,7 +169,12 @@ export class VideoCoordinator {
     }
 
     return {
-      status: { hasVideo: liveCandidates.length > 0, candidates: liveCandidates, selected: next },
+      status: {
+        hasVideo: liveCandidates.length > 0,
+        candidates: liveCandidates,
+        selected: next,
+        unsupportedReason,
+      },
       selectionChanged: !sameSelection(previous, next),
     };
   }

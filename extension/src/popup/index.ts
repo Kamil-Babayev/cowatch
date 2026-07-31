@@ -20,11 +20,13 @@ async function getActiveTab(): Promise<browser.tabs.Tab> {
   return tab;
 }
 
-function showCreateView(noVideo: boolean): void {
+function showCreateView(noVideo: boolean, message = 'No video detected on this page.'): void {
   document.getElementById('loading-view')!.hidden = true;
   document.getElementById('create-view')!.hidden = false;
   document.getElementById('room-view')!.hidden = true;
-  document.getElementById('no-video-message')!.hidden = !noVideo;
+  const noVideoMessage = document.getElementById('no-video-message')!;
+  noVideoMessage.textContent = message;
+  noVideoMessage.hidden = !noVideo;
   (document.getElementById('create-room-btn') as HTMLButtonElement).disabled = noVideo;
 }
 
@@ -85,6 +87,8 @@ async function main(): Promise<void> {
     } else if (videoStatus === 'unreachable') {
       showCreateView(true);
       setStatus('CoWatch could not inspect this tab. Reload it and try again.');
+    } else if (videoStatus === 'unsupported-player') {
+      showCreateView(true, 'This embedded player does not expose synchronization controls.');
     } else {
       showCreateView(videoStatus === 'no-video');
       if (storedSessionError) setStatus(storedSessionError);

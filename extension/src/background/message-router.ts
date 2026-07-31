@@ -17,6 +17,7 @@ export interface TabsAPI {
     options?: { frameId?: number },
   ): unknown | Promise<unknown>;
   update(tabId: number, updateProps: { url: string }): void | Promise<unknown>;
+  get(tabId: number): Promise<{ url?: string }>;
 }
 
 /** Minimal surface of `browser.storage.session` this router needs. */
@@ -37,7 +38,7 @@ export interface LinkMinter {
 }
 
 export interface MessageSender {
-  tab?: { id?: number };
+  tab?: { id?: number; url?: string };
   frameId?: number;
   documentId?: string;
 }
@@ -135,6 +136,14 @@ export function createMessageRouter(
       },
       onTimeSync: (state, timestamp) =>
         videoRouting.sendToSelected(tabId, { kind: 'timeSync', state, timestamp }),
+      onPlayerState: async (state) => {
+        const tab = await tabs.get(tabId);
+        if (tab.url && new URL(tab.url).href !== new URL(state.source.pageUrl).href) {
+          await tabs.update(tabId, { url: state.source.pageUrl });
+          return;
+        }
+        await videoRouting.sendToSelected(tabId, { kind: 'applyPlayerState', state });
+      },
       onControlDenied: (reason) =>
         videoRouting.sendToTop(tabId, { kind: 'controlDenied', reason }),
       onPresence: (payload) =>
@@ -145,9 +154,6 @@ export function createMessageRouter(
         return videoRouting.sendToTop(tabId, { kind: 'sessionInfo', payload });
       },
       onConnectionState: (state) => {
-        if (state === 'error' || state === 'disconnected') {
-          void clearSessionIfCurrent(tabId, roomId);
-        }
         return videoRouting.sendToTop(tabId, { kind: 'connectionState', state });
       },
       onRoomClosed: (reason) => {
@@ -200,6 +206,20 @@ export function createMessageRouter(
         roomManager.reportLocalEvent(tabId, msg.event);
         return;
 
+      case 'localPlayerEvent':
+        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
+        roomManager.reportPlayerEvent(tabId, msg.event, sender.tab?.url);
+        return;
+
+      case 'playerHeartbeat':
+        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
+        roomManager.reportPlayerHeartbeat(tabId, msg.state, sender.tab?.url);
+        return;
+
+      case 'playerAdapterStatus':
+        await videoRouting.sendToTop(tabId, msg);
+        return;
+
       case 'playbackHeartbeat':
         if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
         roomManager.reportHeartbeat(tabId, msg.state);
@@ -215,7 +235,7 @@ export function createMessageRouter(
         return;
 
       case 'leaveRoom':
-        roomManager.disconnect(tabId);
+        roomManager.disconnect(tabId, true);
         sessionPayloads.delete(tabId);
         videoRouting.clear(tabId);
         await sessionStorage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);

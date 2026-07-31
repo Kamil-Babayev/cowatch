@@ -2,6 +2,8 @@
 // If the server's message.go gains/changes a type, this file needs the
 // same edit, or the two sides will silently disagree about the wire format.
 
+import type { MediaSource } from './player.ts';
+
 export type MessageType =
   | 'session'
   | 'presence'
@@ -12,7 +14,11 @@ export type MessageType =
   | 'stateRequest'
   | 'stateResponse'
   | 'controlDenied'
-  | 'roomClosed';
+  | 'roomClosed'
+  | 'playerCommand'
+  | 'playerHeartbeat'
+  | 'playerState'
+  | 'leaveRoom';
 
 export interface Message<T = unknown> {
   type: MessageType;
@@ -43,6 +49,33 @@ export interface PlaybackPayload {
 export interface StateResponsePayload {
   currentTime: number;
   isPlaying: boolean;
+  revision?: number;
+  source?: MediaSource;
+  position?: number;
+  status?: 'playing' | 'paused' | 'buffering' | 'ended';
+}
+
+export interface PlayerCommandPayload {
+  commandId: string;
+  baseRevision: number;
+  action: 'play' | 'pause' | 'seek' | 'replace';
+  source: MediaSource;
+  position: number;
+}
+
+export interface PlayerHeartbeatPayload {
+  baseRevision: number;
+  source: MediaSource;
+  position: number;
+  status: 'playing' | 'paused' | 'buffering' | 'ended';
+}
+
+export interface PlayerStatePayload {
+  revision: number;
+  source: MediaSource;
+  position: number;
+  status: 'playing' | 'paused' | 'buffering' | 'ended';
+  commandId?: string;
 }
 
 export interface ControlDeniedPayload {

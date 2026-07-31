@@ -16,6 +16,13 @@ test('detectPopupVideoStatus distinguishes all outcomes', async () => {
     'no-video',
   );
   assert.equal(
+    await detectPopupVideoStatus(
+      { id: 1, url: 'https://video.example' },
+      async () => ({ hasVideo: false, unsupportedReason: 'unsupported' }),
+    ),
+    'unsupported-player',
+  );
+  assert.equal(
     await detectPopupVideoStatus({ id: 1, url: 'about:config' }, send),
     'restricted',
   );

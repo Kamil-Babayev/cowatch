@@ -5,8 +5,9 @@ import overlayStyles from './overlay.css';
 import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
 import type { SessionPayload } from '../shared/messages.ts';
 import type { VideoTabStatus } from '../shared/video-frames.ts';
+import { debugLog } from '../shared/config.ts';
 
-console.log('[CoWatch] top-frame coordinator loaded on', window.location.href);
+debugLog('top-frame coordinator loaded', { pageUrl: window.location.href });
 
 interface Overlay {
   hostEl: HTMLElement;
@@ -241,12 +242,21 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       });
       return;
     case 'connectionState':
-      if (msg.state === 'error' || msg.state === 'disconnected') {
+      if (msg.state === 'reconnecting') {
+        setTransientMessage('Room connection lost — reconnecting…', 10_000);
+      } else if (msg.state === 'connected') {
+        if (overlay?.transientStatusEl.textContent.includes('reconnecting')) {
+          setTransientMessage('Room connection restored');
+        }
+      } else if (msg.state === 'error' || msg.state === 'disconnected') {
         setTransientMessage(
           msg.state === 'error' ? 'Room connection failed' : 'Room disconnected',
           10_000,
         );
       }
+      return;
+    case 'playerAdapterStatus':
+      setTransientMessage(msg.message ?? `Player status: ${msg.status}`, 10_000);
       return;
     case 'roomClosed':
       setTransientMessage(

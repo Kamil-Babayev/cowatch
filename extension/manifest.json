@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CoWatch",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Sync video playback with friends on any site, plus video/voice chat.",
   "browser_specific_settings": {
     "gecko": {

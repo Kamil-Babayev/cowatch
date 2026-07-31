@@ -47,6 +47,27 @@ func TestRoomStoreConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRevisionedPlayerStateRejectsStaleBase(t *testing.T) {
+	s := NewRoomStore()
+	room, _ := s.Create("https://example.com", ControlModeOpen)
+	first, found, applied := s.ApplyPlayerState(room.ID, 0, PlayerState{
+		Source:    MediaSource{PageURL: room.VideoURL, Provider: "native", MediaKey: "https://cdn.example/1.mp4"},
+		Position:  10,
+		Status:    "playing",
+		UpdatedAt: 100,
+	})
+	if !found || !applied || first.Revision != 1 {
+		t.Fatalf("first %+v found=%v applied=%v", first, found, applied)
+	}
+	current, found, applied := s.ApplyPlayerState(room.ID, 0, PlayerState{Position: 20})
+	if !found || applied || current.Revision != 1 || current.Position != 10 {
+		t.Fatalf("stale %+v found=%v applied=%v", current, found, applied)
+	}
+	if got, ok := s.CurrentPlayerState(room.ID); !ok || got.Revision != 1 {
+		t.Fatalf("current %+v ok=%v", got, ok)
+	}
+}
+
 func TestTokenStoreResolveExpireCleanupAndStop(t *testing.T) {
 	s := NewTokenStore(2 * time.Millisecond)
 	token, err := s.Create("room", 5*time.Millisecond)
