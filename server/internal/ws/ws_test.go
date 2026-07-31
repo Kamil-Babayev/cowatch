@@ -204,6 +204,59 @@ func TestRevisionedPlayerStateAndStaleCommand(t *testing.T) {
 	}
 }
 
+func TestPlayerHeartbeatAuthorityAndStaleRevision(t *testing.T) {
+	server, room, _ := websocketServer(t, store.ControlModeOpen)
+	host := dialRoom(t, server, room.ID, room.HostToken)
+	readType(t, host, MsgSession)
+	guest := dialRoom(t, server, room.ID, "")
+	readType(t, guest, MsgSession)
+
+	source := MediaSourcePayload{
+		PageURL:  "https://video.example/watch",
+		Provider: "native",
+		MediaKey: "https://cdn.example/video.mp4",
+	}
+	guestHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
+		BaseRevision: 0, Source: source, Position: 99, Status: "playing",
+	})
+	if err := guest.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: guestHeartbeat}); err != nil {
+		t.Fatal(err)
+	}
+	if err := guest.WriteJSON(Message{Type: MsgStateRequest}); err != nil {
+		t.Fatal(err)
+	}
+
+	hostHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
+		BaseRevision: 0, Source: source, Position: 24, Status: "buffering",
+	})
+	if err := host.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: hostHeartbeat}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := readType(t, guest, MsgPlayerState)
+	var state PlayerStatePayload
+	if err := json.Unmarshal(accepted.Payload, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != 1 || state.Status != "buffering" || state.Position != 24 || state.Source != source {
+		t.Fatalf("heartbeat state %+v", state)
+	}
+
+	staleHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
+		BaseRevision: 0, Source: source, Position: 30, Status: "playing",
+	})
+	if err := host.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: staleHeartbeat}); err != nil {
+		t.Fatal(err)
+	}
+	response := readType(t, host, MsgStateResponse)
+	var snapshot StateResponsePayload
+	if err := json.Unmarshal(response.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision != 1 || snapshot.Status != "buffering" || snapshot.Position != 24 {
+		t.Fatalf("stale heartbeat response %+v", snapshot)
+	}
+}
+
 func TestSourceReplacementIsAlwaysHostOnly(t *testing.T) {
 	server, room, _ := websocketServer(t, store.ControlModeOpen)
 	host := dialRoom(t, server, room.ID, room.HostToken)
