@@ -10,9 +10,13 @@ import (
 type Hub struct {
 	mu              sync.RWMutex
 	rooms           map[string]map[*client]struct{}
-	hostGrace       map[string]*time.Timer
+	hostGrace       map[string]*hostGrace
 	hostGracePeriod time.Duration
 	OnRoomEmpty     func(roomID string) // called after the last connection in a room leaves
+}
+
+type hostGrace struct {
+	timer *time.Timer
 }
 
 func (h *Hub) leave(c *client, explicit bool) {
@@ -34,8 +38,8 @@ func (h *Hub) leave(c *client, explicit bool) {
 	if c.isHost && explicit {
 		remaining := clientsFromMembers(members)
 		delete(h.rooms, c.roomID)
-		if timer := h.hostGrace[c.roomID]; timer != nil {
-			timer.Stop()
+		if grace := h.hostGrace[c.roomID]; grace != nil {
+			grace.timer.Stop()
 			delete(h.hostGrace, c.roomID)
 		}
 		h.mu.Unlock()
@@ -47,11 +51,13 @@ func (h *Hub) leave(c *client, explicit bool) {
 	}
 	if c.isHost && !hostStillPresent {
 		if old := h.hostGrace[c.roomID]; old != nil {
-			old.Stop()
+			old.timer.Stop()
 		}
-		var timer *time.Timer
-		timer = time.AfterFunc(h.hostGracePeriod, func() { h.expireHostGrace(c.roomID, timer) })
-		h.hostGrace[c.roomID] = timer
+		grace := &hostGrace{}
+		grace.timer = time.AfterFunc(h.hostGracePeriod, func() {
+			h.expireHostGrace(c.roomID, grace)
+		})
+		h.hostGrace[c.roomID] = grace
 		h.mu.Unlock()
 		h.broadcastPresence(c.roomID)
 		return
@@ -76,7 +82,7 @@ func NewHub() *Hub {
 func NewHubWithHostGrace(period time.Duration) *Hub {
 	return &Hub{
 		rooms:           make(map[string]map[*client]struct{}),
-		hostGrace:       make(map[string]*time.Timer),
+		hostGrace:       make(map[string]*hostGrace),
 		hostGracePeriod: period,
 	}
 }
@@ -84,8 +90,8 @@ func NewHubWithHostGrace(period time.Duration) *Hub {
 func (h *Hub) join(c *client) {
 	h.mu.Lock()
 	if c.isHost {
-		if timer := h.hostGrace[c.roomID]; timer != nil {
-			timer.Stop()
+		if grace := h.hostGrace[c.roomID]; grace != nil {
+			grace.timer.Stop()
 			delete(h.hostGrace, c.roomID)
 		}
 	}
@@ -106,7 +112,7 @@ func clientsFromMembers(members map[*client]struct{}) []*client {
 	return clients
 }
 
-func (h *Hub) expireHostGrace(roomID string, expected *time.Timer) {
+func (h *Hub) expireHostGrace(roomID string, expected *hostGrace) {
 	h.mu.Lock()
 	if h.hostGrace[roomID] != expected {
 		h.mu.Unlock()
@@ -188,8 +194,8 @@ func (h *Hub) CloseAll(reason string) {
 	h.mu.Lock()
 	rooms := h.rooms
 	h.rooms = make(map[string]map[*client]struct{})
-	for roomID, timer := range h.hostGrace {
-		timer.Stop()
+	for roomID, grace := range h.hostGrace {
+		grace.timer.Stop()
 		delete(h.hostGrace, roomID)
 	}
 	h.mu.Unlock()
