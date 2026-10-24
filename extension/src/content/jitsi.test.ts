@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { injectJitsi, jitsiRoomName, jitsiRoomUrl, type JitsiEvent } from './jitsi.ts';
+import { describeJitsiError, injectJitsi, jitsiRoomName, jitsiRoomUrl, type JitsiEvent } from './jitsi.ts';
 
 const originalWindow = globalThis.window;
 const originalCrypto = globalThis.crypto;
@@ -51,7 +51,7 @@ test('injectJitsi starts a muted call without the pre-join screen', async () => 
   handle.toggleVideo();
   handle.dispose();
 
-  assert.equal(api.domain, 'meet.jit.si');
+  assert.equal(api.domain, 'localhost:8443');
   assert.equal(api.options.parentNode, parent);
   assert.match(api.options.roomName as string, /^[a-f0-9]{32}$/);
   assert.deepEqual(api.options.userInfo, { displayName: 'Host' });
@@ -69,7 +69,8 @@ test('injectJitsi translates Jitsi events', async () => {
   api.listeners.get('videoConferenceJoined')!({});
   api.listeners.get('audioMuteStatusChanged')!({ muted: false });
   api.listeners.get('videoMuteStatusChanged')!({ muted: true });
-  api.listeners.get('errorOccurred')!({ error: { name: 'conference.connectionError' } });
+  api.listeners.get('errorOccurred')!({ error: { name: 'conference.connectionError.membersOnly', isFatal: false } });
+  api.listeners.get('errorOccurred')!({ error: { name: 'connection.droppedError', isFatal: true } });
   api.listeners.get('errorOccurred')!(undefined);
   api.listeners.get('readyToClose')!({});
   api.listeners.get('videoConferenceLeft')!({});
@@ -77,11 +78,19 @@ test('injectJitsi translates Jitsi events', async () => {
     { type: 'joined' },
     { type: 'audioMuted', muted: false },
     { type: 'videoMuted', muted: true },
-    { type: 'error', message: 'conference.connectionError' },
-    { type: 'error', message: 'Video chat error' },
+    { type: 'error', message: describeJitsiError('conference.connectionError.membersOnly'), fatal: false },
+    { type: 'error', message: 'The video chat connection dropped.', fatal: true },
+    { type: 'error', message: 'Video chat error', fatal: false },
     { type: 'left' },
     { type: 'left' },
   ]);
+});
+
+test('Jitsi error codes become readable messages, never raw codes', () => {
+  assert.match(describeJitsiError('conference.connectionError.membersOnly'), /moderator/);
+  assert.match(describeJitsiError('conference.authenticationRequired'), /sign in/);
+  assert.equal(describeJitsiError('conference.somethingNew'), 'Video chat error');
+  assert.equal(describeJitsiError(undefined), 'Video chat error');
 });
 
 test('injectJitsi reports a missing packaged API', async () => {
@@ -93,7 +102,7 @@ test('room names are stable, unlinkable, and work without crypto.subtle', async 
   const hashed = await jitsiRoomName('room-3');
   assert.equal(await jitsiRoomName('room-3'), hashed);
   assert.notEqual(await jitsiRoomName('room-4'), hashed);
-  assert.equal(await jitsiRoomUrl('room-3'), `https://meet.jit.si/${hashed}`);
+  assert.equal(await jitsiRoomUrl('room-3'), `https://localhost:8443/${hashed}`);
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
   const fallback = await jitsiRoomName('room-3');
   assert.match(fallback, /^[a-f0-9]{32}$/);

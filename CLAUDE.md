@@ -39,7 +39,7 @@ CI (`.github/workflows/test.yml`) additionally requires `gofmt -l .` to be empty
 ### Build-time configuration
 The extension bakes its config in at build time (`extension/build-config.mjs`, `build.mjs`), never at runtime:
 - `SERVER_BASE_URL` (default `http://localhost:8080`) — must be a bare origin and must equal the server's `JOIN_BASE_URL`, or join links and origin checks break. `build.mjs` rewrites the landing-bridge content script's `matches` in `dist/manifest.json` from it (the `localhost` value in source `manifest.json` is only a placeholder).
-- `JITSI_DOMAIN` (default `meet.jit.si`, dev only — embedded meet.jit.si calls are time-limited and need a moderator login; real use needs self-hosted Jitsi, see README).
+- `JITSI_DOMAIN` (default `localhost:8443`, the local docker-jitsi-meet described in README's "Local Jitsi for development"; the release workflow uses the `JITSI_DOMAIN` repository variable and falls back to `meet.jit.si`, whose embedded calls are time-limited and need a moderator login).
 - `COWATCH_DEBUG=1` — enables `debugLog` output (`[CoWatch debug]`) via the `__COWATCH_DEBUG__` define.
 
 `build.mjs` also patches `vendor/jitsi-external-api.js` (removes `Function(...)` eval patterns for AMO lint) and throws if the vendored file's shape changes — update the replacements if you re-vendor Jitsi.

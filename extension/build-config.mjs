@@ -1,5 +1,6 @@
 const DEFAULT_SERVER_BASE_URL = 'http://localhost:8080';
-const DEFAULT_JITSI_DOMAIN = 'meet.jit.si';
+// The local docker-jitsi-meet from README.md. Release builds set JITSI_DOMAIN.
+const DEFAULT_JITSI_DOMAIN = 'localhost:8443';
 
 export function normalizeServerBaseURL(value) {
   let url;

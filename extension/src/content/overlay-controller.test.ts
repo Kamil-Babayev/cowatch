@@ -200,17 +200,23 @@ test('call failures, timeouts and retries', async () => {
   await flush();
   assert.deepEqual(views[0].call.at(-1), { state: 'failed', message: 'JitsiMeetExternalAPI failed to load' });
 
+  // A slow join keeps the call open and uncovered rather than killing it.
   actions[0].retryCall();
   join(calls[1]);
   await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.deepEqual(views[0].call.at(-1), { state: 'failed', message: 'Video chat did not connect' });
-  assert.equal(calls[1].handle.disposed, true);
+  assert.equal(views[0].call.at(-1)?.state, 'waiting');
+  assert.match(views[0].call.at(-1)?.message ?? '', /Still connecting/);
+  assert.equal(calls[1].handle.disposed, false);
+  calls[1].onEvent({ type: 'joined' });
+  assert.equal(views[0].call.at(-1)?.state, 'joined');
 
   actions[0].retryCall();
+  assert.equal(calls[1].handle.disposed, true);
   join(calls[2]);
   await flush();
-  calls[2].onEvent({ type: 'error', message: 'conference.connectionError' });
-  assert.deepEqual(views[0].call.at(-1), { state: 'failed', message: 'conference.connectionError' });
+  calls[2].onEvent({ type: 'error', message: 'Video chat connection dropped', fatal: true });
+  assert.deepEqual(views[0].call.at(-1), { state: 'failed', message: 'Video chat connection dropped' });
+  assert.equal(calls[2].handle.disposed, true);
 
   actions[0].retryCall();
   join(calls[3]);
@@ -223,6 +229,28 @@ test('call failures, timeouts and retries', async () => {
 
   actions[0].openCallWindow();
   assert.deepEqual(opened, ['r1']);
+  controller.handleMessage({ kind: 'roomEnded', reason: 'left' });
+});
+
+test('a non-fatal error, like waiting for a moderator, keeps the call alive', async () => {
+  const { controller, views, calls } = setup({ joinTimeoutMs: 20, keepaliveMs: 1000 });
+  controller.handleMessage({ kind: 'roomConnected', roomId: 'r1' });
+  join(calls[0]);
+  await flush();
+  calls[0].onEvent({ type: 'error', message: 'Waiting for a moderator.', fatal: false });
+  assert.deepEqual(views[0].call.at(-1), { state: 'waiting', message: 'Waiting for a moderator.' });
+  assert.equal(calls[0].handle.disposed, false);
+  // The join timer is cancelled, so the viewer has as long as signing in takes.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(views[0].call.at(-1)?.state, 'waiting');
+  assert.equal(views[0].call.length, 2);
+
+  // The moderator signed in and everyone was let in.
+  calls[0].onEvent({ type: 'joined' });
+  assert.equal(controller.currentCallState, 'joined');
+  calls[0].onEvent({ type: 'error', message: 'Something minor', fatal: false });
+  assert.equal(controller.currentCallState, 'joined');
+  assert.deepEqual(views[0].toasts.at(-1), 'Something minor');
   controller.handleMessage({ kind: 'roomEnded', reason: 'left' });
 });
 

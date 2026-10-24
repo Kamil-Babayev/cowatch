@@ -119,6 +119,24 @@ test('a failed call offers retry and a separate window', () => {
   view.destroy();
 });
 
+test('a waiting call leaves the Jitsi screen uncovered and offers a window', () => {
+  const view = createOverlayView(dom.window.document, actions(), store(), STYLES);
+  view.setCall('waiting', 'Waiting for a moderator.');
+  const message = $('.call-message');
+  assert.equal(message.classList.contains('waiting'), true);
+  assert.match(message.textContent ?? '', /moderator/);
+  assert.equal($('.call-state').textContent, 'Waiting');
+  assert.equal($('.live-dot').classList.contains('offline'), true);
+  assert.equal(root.querySelector('.call-message .spinner'), null);
+  const buttons = [...root.querySelectorAll('.call-actions button')] as HTMLElement[];
+  assert.equal(buttons.length, 1);
+  buttons[0].click();
+  assert.deepEqual(calls, ['window']);
+  view.setCall('connecting');
+  assert.equal(message.classList.contains('waiting'), false);
+  view.destroy();
+});
+
 test('the call card collapses without removing the call', () => {
   const view = createOverlayView(dom.window.document, actions(), store(), STYLES);
   click('[aria-label="Show video chat"]');

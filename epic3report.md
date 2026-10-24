@@ -107,3 +107,31 @@ Root causes and fixes:
 
 Still unverified without real Firefox: the top-layer popover over fullscreen
 video, Jitsi against a self-hosted server, and event-page keepalive behavior.
+
+## Open follow-ups (October 2026)
+
+- **Fixed in 0.2.1: non-fatal Jitsi errors end the call (regression in v0.2.0).** The
+  overlay treats every `errorOccurred` event as fatal and disposes the call.
+  Jitsi reports `conference.connectionError.membersOnly` while a meet.jit.si
+  room waits for a moderator to sign in. That is a recoverable state: before
+  v0.2.0 the iframe stayed and showed Jitsi's own "waiting for host / log in"
+  screen. The 20 s join timeout has the same effect. Fix: fail only on
+  errors with `isFatal: true`, and keep the call (and the timeout off) while
+  Jitsi waits for a moderator. See `content/jitsi.ts` and
+  `content/overlay-controller.ts`. *Fixed:* non-fatal errors and the join
+  timeout now put the call in a `waiting` state that keeps it open and shows
+  the Jitsi screen above a slim bar with **Open in Window**. The full-size
+  "Connecting…" cover also hid Jitsi's sign-in screen, so it is no longer
+  shown once Jitsi asks for something.
+- **Fixed in 0.2.1: raw Jitsi error codes reach the user.** Codes such as
+  `conference.connectionError.membersOnly` are shown verbatim in the call
+  card. Translate the known ones into plain explanations: needs a moderator
+  sign-in, connection failed, room is full, and so on. *Fixed:*
+  `describeJitsiError` maps the known codes and shows a generic message for
+  the rest.
+- **meet.jit.si limits.** Without `JITSI_DOMAIN` set, releases embed public
+  meet.jit.si, which needs a moderator login and ends embedded calls after
+  about 5 minutes. Self-hosting needs HTTPS and UDP 10000, so it cannot run on
+  Render; with no domain, a free `sslip.io` hostname on a VPS would work.
+  Development builds now default to a local docker-jitsi-meet at
+  `localhost:8443` (README, "Local Jitsi for development").

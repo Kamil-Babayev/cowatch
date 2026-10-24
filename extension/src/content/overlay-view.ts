@@ -45,6 +45,13 @@ const ICONS: Record<string, Shape[]> = {
   check: [['path', { d: 'M3.25 8.5l3 3 6.5-7' }]],
 };
 
+const CALL_STATE_LABELS: Record<CallState, string> = {
+  connecting: 'Connecting…',
+  waiting: 'Waiting',
+  joined: 'Live',
+  failed: 'Unavailable',
+};
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function svg(doc: Document, shapes: Shape[]): SVGSVGElement {
@@ -332,10 +339,14 @@ export function createOverlayView(
     pickerButton.setAttribute('aria-expanded', 'false');
   }
 
-  function showCallMessage(text: string, failed: boolean): void {
+  // `connecting` covers the call area with a spinner; `failed` covers it
+  // with recovery buttons; `waiting` is a bar along the bottom that leaves
+  // the Jitsi screen above it usable (e.g. its moderator sign-in).
+  function showCallMessage(text: string, state: Exclude<CallState, 'joined'>): void {
     message.replaceChildren();
     message.hidden = false;
-    if (!failed) {
+    message.classList.toggle('waiting', state === 'waiting');
+    if (state === 'connecting') {
       const spinner = doc.createElement('div');
       spinner.className = 'spinner';
       spinner.setAttribute('aria-hidden', 'true');
@@ -344,13 +355,11 @@ export function createOverlayView(
     const paragraph = doc.createElement('p');
     paragraph.textContent = text;
     message.append(paragraph);
-    if (failed) {
+    if (state !== 'connecting') {
       const buttons = doc.createElement('div');
       buttons.className = 'call-actions';
-      buttons.append(
-        pushButton(doc, 'Try Again', true, actions.retryCall),
-        pushButton(doc, 'Open in Window', false, actions.openCallWindow),
-      );
+      if (state === 'failed') buttons.append(pushButton(doc, 'Try Again', true, actions.retryCall));
+      buttons.append(pushButton(doc, 'Open in Window', false, actions.openCallWindow));
       message.append(buttons);
     }
   }
@@ -379,15 +388,15 @@ export function createOverlayView(
       const joined = state === 'joined';
       mic.disabled = !joined;
       camera.disabled = !joined;
-      callState.textContent = state === 'connecting' ? 'Connecting…' : joined ? 'Live' : 'Unavailable';
-      dot.classList.toggle('offline', state === 'failed');
+      callState.textContent = CALL_STATE_LABELS[state];
+      dot.classList.toggle('offline', state === 'failed' || state === 'waiting');
       if (joined) {
         message.hidden = true;
       } else {
         // Without a call there is nothing to be on; never show a lit button.
         mic.setAttribute('aria-pressed', 'false');
         camera.setAttribute('aria-pressed', 'false');
-        showCallMessage(state === 'connecting' ? 'Connecting to video chat…' : text ?? 'Video chat unavailable', state === 'failed');
+        showCallMessage(state === 'connecting' ? 'Connecting to video chat…' : text ?? 'Video chat unavailable', state);
       }
     },
     setMuted(kind, muted) {
