@@ -3,6 +3,7 @@ package api
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -47,7 +48,15 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
+func clientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		// The proxy appends the address it saw, so the last hop is the only
+		// entry a client cannot forge.
+		hops := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+		if last := strings.TrimSpace(hops[len(hops)-1]); last != "" {
+			return last
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -55,9 +64,9 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func rateLimitMiddleware(rl *rateLimiter, next http.HandlerFunc) http.HandlerFunc {
+func rateLimitMiddleware(rl *rateLimiter, trustProxy bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(clientIP(r)) {
+		if !rl.allow(clientIP(r, trustProxy)) {
 			writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "too many rooms created, try again shortly"})
 			return
 		}

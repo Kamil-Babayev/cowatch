@@ -1,71 +1,61 @@
 import { SERVER_BASE_URL } from '../shared/config.ts';
-import { mintFreshLink } from '../shared/api-client.ts';
+import { createRoom, mintFreshLink, roomExists } from '../shared/api-client.ts';
 import { RoomManager } from './room-manager.ts';
-import { createMessageRouter, type TabsAPI, type SessionStorageAPI, type LinkMinter } from './message-router.ts';
+import { createMessageRouter } from './message-router.ts';
 import type { ToBackgroundMessage } from '../shared/runtime-messages.ts';
 import { VideoCoordinator } from './video-coordinator.ts';
 
 console.log('[CoWatch] background script loaded, server:', SERVER_BASE_URL);
 
-const roomManager = new RoomManager();
+// This file is the only place that touches the real `browser.*` APIs; the
+// modules it wires together only ever see the thin adapters below.
+const roomManager = new RoomManager({ roomExists });
 
-// Thin adapters over the real `browser.*` APIs — this file is the only
-// place that touches them directly; message-router.ts (and its tests)
-// only ever see the TabsAPI/SessionStorageAPI shape.
-const tabsAdapter: TabsAPI = {
-  sendMessage: (tabId, message, options) =>
-    browser.tabs.sendMessage(tabId, message, options),
-  update: (tabId, props) => browser.tabs.update(tabId, props),
-  get: (tabId) => browser.tabs.get(tabId),
-};
-
-const sessionStorageAdapter: SessionStorageAPI = {
-  set: (items) => browser.storage.session.set(items),
-  get: (keys) => browser.storage.session.get(keys),
-  remove: (keys) => browser.storage.session.remove(keys),
-};
-
-const linkMinterAdapter: LinkMinter = { mintFreshLink };
 const videoCoordinator = new VideoCoordinator(
   {
-    sendMessage: (tabId, message, options) =>
-      browser.tabs.sendMessage(tabId, message, options),
+    sendMessage: (tabId, message, options) => browser.tabs.sendMessage(tabId, message, options),
   },
   {
-    getAllFrames: (details) =>
-      browser.webNavigation.getAllFrames(details) as Promise<
-        Array<{
-          frameId: number;
-          parentFrameId: number;
-          documentId?: string;
-        }> | null
-      >,
+    getAllFrames: async (details) => (await browser.webNavigation.getAllFrames(details)) ?? null,
   },
 );
 
-const handleMessage = createMessageRouter(
+const router = createMessageRouter({
   roomManager,
-  tabsAdapter,
-  sessionStorageAdapter,
-  linkMinterAdapter,
-  videoCoordinator,
-);
+  tabs: {
+    update: (tabId, props) => browser.tabs.update(tabId, props),
+    get: (tabId) => browser.tabs.get(tabId),
+  },
+  storage: {
+    set: (items) => browser.storage.session.set(items),
+    get: (keys) => browser.storage.session.get(keys),
+    getAll: () => browser.storage.session.get(null),
+    remove: (keys) => browser.storage.session.remove(keys),
+  },
+  api: { createRoom, mintFreshLink },
+  videos: videoCoordinator,
+});
 
 browser.runtime.onMessage.addListener((message: unknown, sender) => {
-  return handleMessage(message as ToBackgroundMessage, sender).catch((err) => {
+  return router.handleMessage(message as ToBackgroundMessage, sender).catch((err) => {
     console.error('[CoWatch] background message failed:', err);
     throw err;
   });
 });
 
-// Prevents a leaked RoomManager session (and its open WebSocket) once a
-// tab closes — not called out as its own story anywhere, but the
-// alternative is a slow, silent resource leak in normal use.
+// Candidate ids belong to a document; a navigated frame needs choosing again.
+browser.webNavigation.onCommitted.addListener((details) => {
+  router.handleNavigation(details.tabId, details.frameId);
+});
+
+// Prevents a leaked session (and its open WebSocket) once a tab closes.
 browser.tabs.onRemoved.addListener((tabId) => {
-  void handleMessage({ kind: 'leaveRoom', tabId }, {}).finally(() =>
+  void router.handleMessage({ kind: 'leaveRoom', tabId }, {}).finally(() =>
     browser.storage.session.remove([`pendingRoomId:${tabId}`]),
   );
 });
 
-(globalThis as unknown as { cowatchConnect: typeof roomManager.connect }).cowatchConnect =
-  roomManager.connect.bind(roomManager);
+// Firefox may have unloaded this event page while rooms were active.
+void router.restoreSessions().catch((err) => {
+  console.error('[CoWatch] could not restore room sessions:', err);
+});

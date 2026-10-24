@@ -42,3 +42,17 @@ func TestLoadRejectsInvalidBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadTrustProxy(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, "1": true, "TRUE": true} {
+		t.Setenv("TRUST_PROXY", value)
+		cfg, err := Load()
+		if err != nil || cfg.TrustProxy != want {
+			t.Fatalf("TRUST_PROXY=%q: %+v %v", value, cfg, err)
+		}
+	}
+	t.Setenv("TRUST_PROXY", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error for an invalid TRUST_PROXY")
+	}
+}

@@ -12,13 +12,6 @@ const (
 	ControlModeHostOnly = "host-only"
 )
 
-// PlaybackState is the latest server-authoritative playback snapshot.
-type PlaybackState struct {
-	CurrentTime float64
-	IsPlaying   bool
-	UpdatedAt   int64 // unix millis — when this state was true, not when it was read
-}
-
 type MediaSource struct {
 	PageURL  string
 	Provider string
@@ -35,13 +28,12 @@ type PlayerState struct {
 
 // Room contains the ephemeral configuration and state for a watch party.
 type Room struct {
-	ID             string
-	VideoURL       string
-	ControlMode    string
-	CreatedAt      time.Time
-	HostToken      string
-	LastKnownState *PlaybackState
-	PlayerState    *PlayerState
+	ID          string
+	VideoURL    string
+	ControlMode string
+	CreatedAt   time.Time
+	HostToken   string
+	PlayerState *PlayerState
 }
 
 // RoomStore safely stores active rooms in memory.
@@ -93,52 +85,47 @@ func (s *RoomStore) Delete(id string) {
 	delete(s.rooms, id)
 }
 
-// UpdatePlaybackState overwrites the room's cached state. Called from the
-// WS read loop on every relayed play/pause/seeked/timeSync.
-func (s *RoomStore) UpdatePlaybackState(roomID string, state PlaybackState) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if room, ok := s.rooms[roomID]; ok {
-		room.LastKnownState = &state
-	}
-}
-
-// PlaybackState returns the room's cached state, if any exists yet.
-func (s *RoomStore) PlaybackState(roomID string) (PlaybackState, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	room, ok := s.rooms[roomID]
-	if !ok || room.LastKnownState == nil {
-		return PlaybackState{}, false
-	}
-	return *room.LastKnownState, true
-}
-
-func (s *RoomStore) ApplyPlayerState(roomID string, baseRevision uint64, next PlayerState) (PlayerState, bool, bool) {
+// CommitPlayerCommand records an explicit user action. Commands are
+// last-writer-wins: they always apply and always advance the revision, so a
+// user's play/pause/seek is never reverted just because a heartbeat landed
+// a moment earlier.
+func (s *RoomStore) CommitPlayerCommand(roomID string, next PlayerState) (PlayerState, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	room, ok := s.rooms[roomID]
 	if !ok {
-		return PlayerState{}, false, false
+		return PlayerState{}, false
 	}
-	currentRevision := uint64(0)
 	if room.PlayerState != nil {
-		currentRevision = room.PlayerState.Revision
+		next.Revision = room.PlayerState.Revision + 1
+	} else {
+		next.Revision = 1
 	}
-	if baseRevision != currentRevision {
-		if room.PlayerState == nil {
-			return PlayerState{}, true, false
-		}
-		return *room.PlayerState, true, false
-	}
-	next.Revision = currentRevision + 1
 	room.PlayerState = &next
-	room.LastKnownState = &PlaybackState{
-		CurrentTime: next.Position,
-		IsPlaying:   next.Status == "playing",
-		UpdatedAt:   next.UpdatedAt,
+	return next, true
+}
+
+// ApplyHeartbeat refreshes the host's periodic position report. A heartbeat
+// only applies on top of the revision the host last saw, so it can never
+// overwrite a newer command; when it applies it keeps the current revision
+// (the first heartbeat in an empty room establishes revision 1).
+func (s *RoomStore) ApplyHeartbeat(roomID string, baseRevision uint64, next PlayerState) (PlayerState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room, ok := s.rooms[roomID]
+	if !ok {
+		return PlayerState{}, false
 	}
-	return next, true, true
+	if room.PlayerState == nil {
+		next.Revision = 1
+	} else {
+		if baseRevision != room.PlayerState.Revision {
+			return PlayerState{}, false
+		}
+		next.Revision = room.PlayerState.Revision
+	}
+	room.PlayerState = &next
+	return next, true
 }
 
 func (s *RoomStore) CurrentPlayerState(roomID string) (PlayerState, bool) {

@@ -12,16 +12,18 @@ import (
 
 // Deps contains the stores and public URL required by HTTP handlers.
 type Deps struct {
-	Rooms   *store.RoomStore
-	Tokens  *store.TokenStore
-	BaseURL string
+	Rooms      *store.RoomStore
+	Tokens     *store.TokenStore
+	BaseURL    string
+	TrustProxy bool
 }
 
 // Register installs all HTTP and static routes on mux.
 func Register(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("GET /healthz", handleHealth(deps.BaseURL))
 	createLimiter := newRateLimiter(5, time.Minute) // 5 rooms/IP/minute
-	mux.HandleFunc("POST /rooms", rateLimitMiddleware(createLimiter, handleCreateRoom(deps)))
+	mux.HandleFunc("POST /rooms", rateLimitMiddleware(createLimiter, deps.TrustProxy, handleCreateRoom(deps)))
+	mux.HandleFunc("GET /rooms/{roomId}", handleGetRoom(deps))
 	mux.HandleFunc("GET /join/{token}", handleResolveJoin(deps))
 	mux.HandleFunc("POST /rooms/{roomId}/tokens", handleMintToken(deps))
 

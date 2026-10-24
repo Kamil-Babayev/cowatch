@@ -10,6 +10,7 @@ messages.
 |---|---|---|
 | `ADDR` | `:8080` | HTTP listen address |
 | `JOIN_BASE_URL` | `http://localhost:8080` | Public absolute HTTP(S) origin used in generated links and origin validation |
+| `TRUST_PROXY` | `false` | Rate-limit by the last `X-Forwarded-For` hop. Enable only behind a reverse proxy (Render, nginx); otherwise clients could spoof the header |
 
 `JOIN_BASE_URL` is normalized by removing a trailing slash and must be an
 HTTP(S) origin without credentials, path, query, or fragment. Tokens expire
@@ -39,6 +40,9 @@ The complete machine-readable contract is in [openapi.yaml](openapi.yaml).
   token and `404` for an unknown token.
 - `POST /rooms/{roomId}/tokens` issues a fresh join link and requires
   `Authorization: Bearer <hostToken>`.
+- `GET /rooms/{roomId}` returns `{roomId,controlMode}` or `404`. Clients that
+  keep failing to reconnect use it to tell a closed room from a network
+  outage, because a browser WebSocket cannot see its upgrade's status code.
 - `GET /join-page/` serves the embedded landing page.
 - `GET /rooms/{roomId}/connect` upgrades to WebSocket. A host supplies
   `?hostToken=...`.
@@ -51,31 +55,42 @@ values, and HTTP errors use `{ "error": "..." }`.
 Every frame is JSON:
 
 ```json
-{"type":"play","payload":{"currentTime":12.5,"isPlaying":true},"timestamp":0}
+{"type":"playerCommand","payload":{"commandId":"…","action":"play","source":{…},"position":12.5},"timestamp":0}
 ```
 
-Client timestamps are ignored for playback relays; the server stamps Unix
-milliseconds. Supported messages:
+Client timestamps are ignored; the server stamps Unix milliseconds. A
+`source` is `{pageUrl,provider,mediaKey}`: `pageUrl` is the page's http(s)
+URL; `provider` is `native` (a page `<video>`) or `obrut` (a PlayerJS iframe).
+A native `mediaKey` is an opaque key of at most 2048 bytes that the extension
+derives from the page. It is never a `blob:` or CDN URL, which differ between
+browsers. An obrut `mediaKey` must be an http(s) URL on `obrut.show`.
 
 | Type | Direction | Payload / behavior |
 |---|---|---|
 | `session` | server → client | `{connectionId,isHost,controlMode}` |
 | `presence` | server → clients | `{connections:[{connId,isHost}]}` |
-| `play`, `pause`, `seeked`, `timeSync` | client → server → peers | `{currentTime,isPlaying}` |
+| `playerCommand` | client → server | `{commandId,action,source,position}`, where `action` is `play`, `pause`, `seek` or `replace` (host only). Last writer wins: it always applies and bumps the revision |
+| `playerHeartbeat` | host → server | `{baseRevision,source,position,status}`. Applies only when `baseRevision` is current, and keeps the revision. A stale heartbeat is dropped silently, so it can never undo a newer command |
+| `playerState` | server → clients | `{revision,source,position,status,commandId?,originConnectionId}`. Commands go to everyone, including the sender, who skips applying its own. Heartbeats go to everyone except the host |
 | `stateRequest` | client → server | no payload |
-| `stateResponse` | server → requester | cached `{currentTime,isPlaying}` |
+| `stateResponse` | server → requester | `{revision,source,position,status}`; the timestamp is when that state was true. Nothing is sent before the room has a state |
+| `clockPing` | client → server | `{t0}` |
+| `clockPong` | server → requester | `{t0,serverTime}`; clients estimate their clock offset from the round trip |
 | `controlDenied` | server → requester | host-only rejection reason |
+| `leaveRoom` | client → server | explicit departure; a host leaving this way closes the room immediately |
 | `roomClosed` | server → clients | `{reason:"host-left"|"server-shutdown"}` |
 
-Playback times must be finite and non-negative. Frames are capped at 64 KiB.
-The server sends pings every 25 seconds, requires pong/read activity within 60
-seconds, and applies write deadlines. Relays exclude the sender.
+`status` is one of `playing`, `paused`, `buffering` or `ended`. Positions must
+be finite and non-negative. Frames are capped at 64 KiB. The server sends
+pings every 25 seconds, requires pong/read activity within 60 seconds, and
+applies write deadlines.
 
 ## Lifecycle and security
 
 Host authority is server-authored in the `session` frame after constant-time
 host-token verification. In host-only rooms, joiner playback messages are
-rejected and never update cached state. When the host leaves, the server sends
+rejected and never update cached state. A host that disconnects without
+`leaveRoom` has 30 seconds to reconnect before the room closes. When the host leaves, the server sends
 `roomClosed` to all joiners, closes their sockets, and removes the room.
 Graceful process shutdown uses `server-shutdown` and then stops HTTP within
 five seconds.

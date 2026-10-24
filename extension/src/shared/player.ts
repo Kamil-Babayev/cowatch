@@ -30,6 +30,11 @@ export interface AuthoritativePlayerState {
   position: number;
   status: Extract<PlayerStatus, 'playing' | 'paused' | 'buffering' | 'ended'>;
   commandId?: string;
+  /**
+   * When `position` was true, in this machine's clock (Date.now()). The
+   * background converts the server's timestamp using its measured clock
+   * offset, so adapters can project the position without knowing about it.
+   */
   timestamp: number;
 }
 
@@ -41,8 +46,13 @@ export interface PlayerCapabilities {
   canSetRate: boolean;
 }
 
+/**
+ * `play`/`pause`/`seek`/`replace` are user intents that become room
+ * commands. `buffering`/`status`/`ended` only describe the player's state;
+ * the host reports them as heartbeats and joiners ignore them.
+ */
 export interface PlayerEvent extends PlayerSnapshot {
-  action: 'play' | 'pause' | 'seek' | 'replace' | 'buffering' | 'ended';
+  action: 'play' | 'pause' | 'seek' | 'replace' | 'buffering' | 'status' | 'ended';
 }
 
 export interface PlayerAdapter {
@@ -52,7 +62,8 @@ export interface PlayerAdapter {
   getState(): Promise<PlayerSnapshot>;
   subscribe(listener: (event: PlayerEvent) => void): () => void;
   apply(state: AuthoritativePlayerState): Promise<void>;
-  loadSource(source: MediaSource): Promise<void>;
+  /** True when the adapter itself navigated its element to `src`. */
+  expectsSource?(src: string): boolean;
   dispose(): void;
 }
 

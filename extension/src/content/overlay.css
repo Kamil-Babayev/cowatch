@@ -1,160 +1,534 @@
 /*
- * Same design language as popup.css (dark charcoal + sync-mark amber,
- * monospace labels/buttons) — consistency across the extension's own
- * surfaces is the visual identity here, no need for a second signature
- * element on top of the popup's status-dot motif.
+ * In-page HUD, macOS Monterey style: translucent "vibrancy" material,
+ * hairline borders, system font, system-blue accent, light and dark.
+ * The token block below is kept identical in popup.css and the landing
+ * page's landing.css.
  *
- * Injected as an inline <style> inside the overlay's shadow root (see
- * content/index.ts) — :host below styles the shadow host element itself
- * (#cowatch-overlay-host in the page's light DOM), which is how a
- * shadow-DOM stylesheet reaches "outward" to its own attachment point.
+ * Lives in a shadow root, so page CSS cannot reach it and nothing here
+ * leaks out. The host element is a full-viewport, click-through top-layer
+ * popover; only the panels inside it take pointer events.
  */
 
 :host {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --accent: #007aff;
+  --accent-pressed: #0062cc;
+  --destructive: #ff3b30;
+  --success: #34c759;
+  --label: rgba(0, 0, 0, 0.85);
+  --secondary-label: rgba(0, 0, 0, 0.5);
+  --material: rgba(246, 246, 246, 0.78);
+  --material-solid: #f6f6f6;
+  --control: rgba(0, 0, 0, 0.05);
+  --control-hover: rgba(0, 0, 0, 0.09);
+  --hairline: rgba(0, 0, 0, 0.12);
+  --separator: rgba(0, 0, 0, 0.1);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  --radius-panel: 12px;
+  --radius-control: 7px;
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.4);
+
   all: initial;
-  position: fixed;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
-  z-index: 2147483647; /* above virtually anything a host page could set */
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  color-scheme: light dark;
+  font: 13px/1.35 var(--font);
+  color: var(--label);
+  -webkit-font-smoothing: antialiased;
 }
 
-.cowatch-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: rgb(23 20 15 / 92%);
-  border: 1px solid #5c4420;
-  border-radius: 8px;
-  padding: 8px;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 40%);
+@media (prefers-color-scheme: dark) {
+  :host {
+    --accent: #0a84ff;
+    --accent-pressed: #409cff;
+    --destructive: #ff453a;
+    --success: #30d158;
+    --label: rgba(255, 255, 255, 0.88);
+    --secondary-label: rgba(255, 255, 255, 0.55);
+    --material: rgba(40, 40, 40, 0.78);
+    --material-solid: #282828;
+    --control: rgba(255, 255, 255, 0.08);
+    --control-hover: rgba(255, 255, 255, 0.14);
+    --hairline: rgba(255, 255, 255, 0.14);
+    --separator: rgba(255, 255, 255, 0.12);
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(0, 0, 0, 0.6);
+    --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.5);
+  }
 }
 
-.cowatch-jitsi-slot {
-  width: 220px;
-  height: 124px;
-  flex-shrink: 0;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #0f0d09;
-  color: #9c9585;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 10px;
-  text-align: center;
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
-.cowatch-jitsi-slot iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
+[hidden] {
+  display: none !important;
 }
 
-.cowatch-controls {
+.panel {
+  position: absolute;
+  pointer-events: auto;
+  background: var(--material);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .panel {
+    background: var(--material-solid);
+  }
+}
+
+/* ---------- HUD ---------- */
+
+.hud-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  margin: 0 auto;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
 }
 
-.cowatch-btn {
-  font-family: inherit;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.hud-wrap.placed {
+  right: auto;
+  bottom: auto;
+  margin: 0;
+}
+
+.hud {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 6px 5px 12px;
+  border-radius: 999px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.hud.dragging {
+  cursor: grabbing;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+  flex: none;
+}
+
+.live-dot.offline {
+  background: #ff9f0a;
+  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.22);
+}
+
+.hud-status {
+  display: flex;
+  flex-direction: column;
+  margin: 0 10px 0 9px;
+  min-width: 0;
   white-space: nowrap;
-  border: 1px solid #5c4420;
-  border-radius: 4px;
+}
+
+.participants {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.control {
+  font-size: 11px;
+  color: var(--secondary-label);
+}
+
+.separator {
+  width: 0.5px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: var(--separator);
+}
+
+.icon-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--label);
+  cursor: default;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.icon-btn:hover {
+  background: var(--control-hover);
+}
+
+.icon-btn:active {
+  background: var(--control);
+}
+
+.icon-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+}
+
+.icon-btn:disabled:hover {
   background: transparent;
-  color: #e8a33d;
-  padding: 6px 10px;
-  cursor: pointer;
 }
 
-.cowatch-btn:hover {
-  border-color: #e8a33d;
+/* A muted mic/camera reads as "off": struck through, secondary color. */
+.icon-btn[aria-pressed='false'] {
+  color: var(--secondary-label);
 }
 
-.cowatch-btn:focus-visible {
-  outline: 2px solid #e8a33d;
-  outline-offset: 2px;
-}
-
-.cowatch-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.cowatch-btn-danger {
-  color: #9c9585;
-}
-
-.cowatch-btn-danger:hover {
-  color: #c0532f;
-  border-color: #c0532f;
-}
-
-/* Hook for US-3.4 — empty and unstyled beyond basic placement until that
-   story renders the "who has control" indicator and controlDenied banner
-   into it. Kept here now so US-3.4 doesn't need to touch this file's
-   layout again, only add content inside it. */
-.cowatch-status {
-  font-size: 10px;
-  color: #9c9585;
-  max-width: 140px;
-}
-
-.cowatch-status:empty {
+.icon-btn .slash {
   display: none;
 }
 
-.cowatch-status-persistent {
-  color: #f1ecdf;
+.icon-btn[aria-pressed='false'] .slash {
+  display: inline;
 }
 
-.cowatch-status-transient {
-  color: #e8a33d;
+.icon-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fff;
 }
 
-.cowatch-selector {
-  margin-top: 6px;
-  padding: 10px;
+.icon-btn[aria-expanded='true'] {
+  background: var(--control-hover);
+}
+
+.icon-btn.destructive:hover {
+  background: var(--destructive);
+  color: #fff;
+}
+
+.hud.collapsed .hud-status,
+.hud.collapsed .controls,
+.hud.collapsed .separator {
+  display: none;
+}
+
+.hud.collapsed {
+  padding: 5px 5px 5px 12px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ---------- Toast ---------- */
+
+.toast {
+  position: relative;
+  max-width: 360px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: none;
+}
+
+.toast:empty {
+  display: none;
+}
+
+/* ---------- Video picker ---------- */
+
+.picker {
+  position: relative;
+  width: 300px;
+  padding: 6px;
+}
+
+.picker-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 6px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--secondary-label);
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.picker-item {
+  all: unset;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-control);
+  cursor: default;
+}
+
+.picker-item:hover,
+.picker-item:focus-visible {
+  background: var(--accent);
+  color: #fff;
+}
+
+.picker-item:hover .picker-detail,
+.picker-item:focus-visible .picker-detail {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.picker-item svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  visibility: hidden;
+}
+
+.picker-item[aria-checked='true'] svg {
+  visibility: visible;
+}
+
+.picker-name {
+  font-weight: 500;
+}
+
+.picker-detail {
+  display: block;
+  font-size: 11px;
+  color: var(--secondary-label);
+}
+
+.picker-divider {
+  height: 0.5px;
+  margin: 4px 8px;
+  background: var(--separator);
+}
+
+.picker-empty {
+  padding: 8px;
+  color: var(--secondary-label);
+}
+
+/* ---------- Call card ---------- */
+
+.call-card {
+  right: 20px;
+  bottom: 84px;
+  width: 320px;
+  height: 222px;
+  min-width: 220px;
+  min-height: 160px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.call-card.placed {
+  right: auto;
+  bottom: auto;
+}
+
+/*
+ * Hidden with visibility rather than display:none, so the call's iframe is
+ * never unloaded and the call keeps running while the card is tucked away.
+ */
+.call-card.collapsed {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.call-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgb(23 20 15 / 96%);
-  border: 1px solid #5c4420;
-  border-radius: 8px;
-  color: #f1ecdf;
-  font-size: 10px;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  flex: none;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  border-bottom: 0.5px solid var(--separator);
 }
 
-.cowatch-selector[hidden],
-.cowatch-btn[hidden] {
-  display: none;
+.call-title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.call-state {
+  font-size: 11px;
+  color: var(--secondary-label);
+}
+
+.call-header .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.call-header .icon-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.call-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}
+
+.call-slot {
+  position: absolute;
+  inset: 0;
+}
+
+.call-slot iframe {
+  display: block;
+  border: 0;
+}
+
+.call-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  color: var(--label);
+  background: var(--material-solid);
+}
+
+.call-message p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--secondary-label);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--separator);
+  border-top-color: var(--secondary-label);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.call-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.push-btn {
+  all: unset;
+  box-sizing: border-box;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--control-hover);
+  border: 0.5px solid var(--hairline);
+  color: var(--label);
+  cursor: default;
+}
+
+.push-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.push-btn:active {
+  filter: brightness(0.92);
+}
+
+.push-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------- Ended notice ---------- */
+
+.ended {
+  position: relative;
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-weight: 500;
 }
 
 @media (max-width: 620px) {
-  .cowatch-bar {
-    max-width: calc(100vw - 20px);
-    flex-wrap: wrap;
+  .hud-status .control {
+    display: none;
   }
 
-  .cowatch-jitsi-slot {
-    width: 160px;
-    height: 90px;
-  }
-
-  .cowatch-controls {
-    flex-direction: row;
-    flex-wrap: wrap;
+  .call-card {
+    width: 220px;
+    height: 160px;
+    right: 12px;
+    bottom: 76px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
-    scroll-behavior: auto !important;
+  .toast,
+  .icon-btn {
+    transition: none;
+  }
+
+  .spinner {
+    animation-duration: 3s;
   }
 }

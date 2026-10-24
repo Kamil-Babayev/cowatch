@@ -42,3 +42,16 @@ export async function mintFreshLink(roomId: string, hostToken: string): Promise<
   const result = (await res.json()) as MintTokenResult;
   return { ...result, joinUrl: canonicalJoinUrl(result.joinToken) };
 }
+
+/**
+ * Whether a room still exists. A browser WebSocket cannot see the 404 its
+ * upgrade got, so a client that keeps failing to reconnect asks here to
+ * tell "room is gone" apart from "network is down". Network failures
+ * reject, meaning "unknown — keep trying".
+ */
+export async function roomExists(roomId: string): Promise<boolean> {
+  const res = await fetch(`${SERVER_BASE_URL}/rooms/${encodeURIComponent(roomId)}`);
+  if (res.status === 404) return false;
+  if (!res.ok) throw new Error(`roomExists failed (${res.status})`);
+  return true;
+}

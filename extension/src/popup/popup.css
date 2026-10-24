@@ -1,268 +1,356 @@
 /*
- * Design plan (see frontend-design skill's process — recorded here since
- * there's no other place in this repo for design notes):
- *
- * Subject: a ~340px Firefox toolbar popup for a synchronized watch-party
- * tool. Grounded in film-projection sync marks — the grease-pencil dot
- * projectionists used to mark the exact frame to start a reel, and the
- * amber tally light that shows when a camera is live. Both are literally
- * about "are we in sync / are we live right now," which is what this
- * popup's whole job is.
- *
- * Palette (named):
- *   --ink        #17140F  near-black warm charcoal, background
- *   --paper      #F1ECDF  warm bone white, primary text
- *   --paper-dim  #9C9585  muted warm gray, secondary text/labels
- *   --amber      #E8A33D  sync-mark amber, the one accent, "live" state
- *   --amber-deep #5C4420  dimmed amber, borders / "idle" state
- *   --rust       #C0532F  error state only, used sparingly
- *
- * Type: a monospace stack for the wordmark, labels, and the join-link
- * itself (a technical, timecode-readout feel — fits "sync mark" more than
- * a friendly rounded sans would), a system sans stack for actual
- * sentence-length copy (status messages) so long text stays readable.
- * No remote font loading — zero dependencies, no manifest CSP change,
- * consistent with this project's whole pattern of avoiding unneeded
- * machinery (see epic-1-report.md's YAML/Fiber notes, epic-2-report.md's
- * ts-node/Jest notes).
- *
- * Signature element: the status dot next to the wordmark. Dim amber-deep
- * when idle, solid lit amber with a slow pulse when a room is active —
- * driven entirely by :has(), no new JS. Everything else stays quiet:
- * flat fills, hairline borders, no gradients or shadows.
- *
- * Self-critique: dark background + single accent is one of the three
- * generic AI-design patterns to actively avoid — kept anyway because
- * amber-on-charcoal is a specific, sourced reference (tally lights, sync
- * marks) rather than an arbitrary mood choice, and the monospace/timecode
- * treatment throughout is what actually carries that reference, not the
- * color alone.
+ * Toolbar popup, macOS Monterey style: window material, system font,
+ * system-blue accent, segmented control, light and dark. The token block
+ * is kept identical in content/overlay.css and the landing page's
+ * landing.css.
  */
 
 :root {
-  --ink: #17140f;
-  --paper: #f1ecdf;
-  --paper-dim: #9c9585;
-  --amber: #e8a33d;
-  --amber-deep: #5c4420;
-  --rust: #c0532f;
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --accent: #007aff;
+  --accent-pressed: #0062cc;
+  --destructive: #ff3b30;
+  --success: #34c759;
+  --label: rgba(0, 0, 0, 0.85);
+  --secondary-label: rgba(0, 0, 0, 0.5);
+  --window: #ececec;
+  --content: #ffffff;
+  --control: #ffffff;
+  --control-track: rgba(0, 0, 0, 0.06);
+  --hairline: rgba(0, 0, 0, 0.12);
+  --separator: rgba(0, 0, 0, 0.1);
+  --radius-panel: 10px;
+  --radius-control: 6px;
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.4);
+  --control-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
 
-  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-  --sans:
-    system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #0a84ff;
+    --accent-pressed: #409cff;
+    --destructive: #ff453a;
+    --success: #30d158;
+    --label: rgba(255, 255, 255, 0.88);
+    --secondary-label: rgba(255, 255, 255, 0.55);
+    --window: #2a2a2a;
+    --content: #1f1f1f;
+    --control: #5b5b5d;
+    --control-track: rgba(255, 255, 255, 0.08);
+    --hairline: rgba(255, 255, 255, 0.14);
+    --separator: rgba(255, 255, 255, 0.12);
+    --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.5);
+    --control-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(0, 0, 0, 0.5);
+  }
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* JS toggles the hidden attribute; class display rules must not undo it. */
 [hidden] {
   display: none !important;
 }
 
 body {
-  width: 320px;
   margin: 0;
-  padding: 16px;
-  background: var(--ink);
-  color: var(--paper);
-  font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.5;
+  width: 320px;
+  background: var(--window);
+  color: var(--label);
+  font: 13px/1.4 var(--font);
+  -webkit-font-smoothing: antialiased;
 }
 
-.brand {
+.titlebar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 12px;
-  margin-bottom: 14px;
-  border-bottom: 1px solid var(--amber-deep);
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 0.5px solid var(--separator);
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--amber-deep);
-  flex-shrink: 0;
+.app {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
-/* The one bit of reactive styling in this whole file — reads the exact
-   `hidden` attribute index.ts already toggles on #room-view, no new JS. */
-body:has(#room-view:not([hidden])) .status-dot {
-  background: var(--amber);
-  animation: pulse 2.4s ease-in-out infinite;
+.app-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgb(232 163 61 / 55%);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgb(232 163 61 / 0%);
-  }
-}
-
-.wordmark {
-  font-family: var(--mono);
-  font-size: 12px;
+.app-name {
   font-weight: 600;
-  letter-spacing: 0.14em;
-  color: var(--paper);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+main {
+  padding: 14px;
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.state {
+  align-items: center;
+  padding: 18px 0;
+  color: var(--secondary-label);
+}
+
+.state p {
+  margin: 0;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--separator);
+  border-top-color: var(--secondary-label);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lead {
+  margin: 0;
+  color: var(--secondary-label);
+}
+
+.notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, #ff9f0a 14%, transparent);
+  color: var(--label);
+}
+
+.field {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .field-label {
-  display: block;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--paper-dim);
-  margin-bottom: 6px;
-}
-
-#create-view label {
-  display: block;
-  margin-bottom: 14px;
-}
-
-select#control-mode {
-  width: 100%;
-  appearance: none;
-  background: var(--ink);
-  color: var(--paper);
-  border: 1px solid var(--amber-deep);
-  border-radius: 4px;
-  padding: 8px 28px 8px 10px;
-  font-family: var(--sans);
-  font-size: 13px;
-  background-image: linear-gradient(45deg, transparent 50%, var(--paper-dim) 50%),
-    linear-gradient(135deg, var(--paper-dim) 50%, transparent 50%);
-  background-position:
-    calc(100% - 16px) center,
-    calc(100% - 11px) center;
-  background-size:
-    5px 5px,
-    5px 5px;
-  background-repeat: no-repeat;
-}
-
-select#control-mode:focus-visible,
-button:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--amber);
-  outline-offset: 1px;
-}
-
-p#no-video-message {
-  color: var(--rust);
-  font-size: 12px;
-  margin: 0 0 12px;
-}
-
-#loading-view {
-  color: var(--paper-dim);
-  font-family: var(--mono);
+  padding: 0;
   font-size: 11px;
-  padding: 12px 0;
+  font-weight: 600;
+  color: var(--secondary-label);
+}
+
+/* Segmented control: radio inputs styled as one rounded track. */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--control-track);
+}
+
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented label {
+  padding: 3px 8px;
+  border-radius: 5px;
+  text-align: center;
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+}
+
+.segmented input:checked + label {
+  background: var(--control);
+  box-shadow: var(--control-shadow);
+  font-weight: 500;
+}
+
+.segmented input:focus-visible + label {
+  box-shadow: var(--focus-ring);
+}
+
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 5px 12px;
+  font: 500 13px/1.3 var(--font);
+  color: var(--label);
+  background: var(--control);
+  box-shadow: var(--control-shadow);
+  cursor: default;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.btn.primary {
+  color: #fff;
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.btn.primary:active {
+  background: var(--accent-pressed);
+}
+
+.btn.small {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.btn.destructive {
+  align-self: center;
+  background: transparent;
+  box-shadow: none;
+  color: var(--destructive);
+}
+
+.btn.destructive:hover {
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-panel);
+  background: var(--content);
+  border: 0.5px solid var(--hairline);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-title {
+  font-weight: 600;
+}
+
+.badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--secondary-label);
+  background: var(--control-track);
+}
+
+.badge:empty {
+  display: none;
+}
+
+.invite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.link-row {
+  display: flex;
+  gap: 6px;
+}
+
+#join-url {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 0.5px solid var(--hairline);
+  background: var(--window);
+  color: var(--label);
+  font: 11.5px var(--mono);
+}
+
+#join-url:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--secondary-label);
+}
+
+p.hint {
+  margin: 0;
+}
+
+.status {
+  margin: 10px 0 0;
+  font-size: 12px;
+  text-align: center;
+  color: var(--secondary-label);
+}
+
+.status:empty {
+  display: none;
+}
+
+.status[data-tone='error'] {
+  color: var(--destructive);
+}
+
+.status[data-tone='success'] {
+  color: var(--success);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-dot {
-    animation: none !important;
+  .spinner {
+    animation-duration: 3s;
   }
-}
-
-button {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-button#create-room-btn {
-  width: 100%;
-  padding: 12px;
-  background: var(--amber);
-  color: var(--ink);
-  font-weight: 700;
-}
-
-button#create-room-btn:not(:disabled):hover {
-  background: #f0b45c;
-}
-
-#room-view p {
-  margin: 0 0 10px;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--paper-dim);
-  text-transform: uppercase;
-}
-
-input#join-url {
-  width: 100%;
-  background: #0f0d09;
-  color: var(--paper);
-  border: 1px solid var(--amber-deep);
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-family: var(--mono);
-  font-size: 11px;
-  margin-bottom: 8px;
-}
-
-button#copy-link-btn {
-  width: 100%;
-  padding: 9px;
-  background: transparent;
-  color: var(--amber);
-  border: 1px solid var(--amber-deep);
-}
-
-button#copy-link-btn:hover {
-  border-color: var(--amber);
-}
-
-span#expiry-note {
-  display: block;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--paper-dim);
-  margin: 10px 0 16px;
-}
-
-button#leave-room-btn {
-  width: 100%;
-  padding: 9px;
-  background: transparent;
-  color: var(--paper-dim);
-  border: 1px solid var(--amber-deep);
-}
-
-button#leave-room-btn:hover {
-  color: var(--rust);
-  border-color: var(--rust);
-}
-
-p#status {
-  min-height: 14px;
-  margin: 12px 0 0;
-  font-size: 11px;
-  color: var(--paper-dim);
-}
-
-p#status:not(:empty) {
-  color: var(--amber);
 }

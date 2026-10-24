@@ -60,6 +60,32 @@ Load a production build manually from Firefox:
 3. Choose **Load Temporary Add-on**.
 4. Select `extension/dist/manifest.json`.
 
+## Video chat: self-hosted Jitsi
+
+The overlay embeds a Jitsi call. Public `meet.jit.si` is only the
+development default: it limits meetings embedded in other sites to a short
+demo, and requires the first participant to sign in as moderator, which can't
+be done inside the overlay. For real use, run your own Jitsi Meet
+([docker-jitsi-meet](https://github.com/jitsi/docker-jitsi-meet)) on a public
+HTTPS hostname and configure it to:
+
+- allow anonymous rooms (`ENABLE_AUTH=0`, which is the default);
+- disable the lobby and the pre-join page (the extension also asks the call
+  to skip pre-join);
+- allow being framed by other sites: do not send `X-Frame-Options` or a
+  restrictive `frame-ancestors` CSP from its web server.
+
+Then build the extension against it:
+
+```sh
+JITSI_DOMAIN=meet.example.com npm --prefix extension run build
+```
+
+The call starts with camera and microphone off. If a site's own security
+policy blocks the embedded call, the overlay reports it after 20 seconds and
+offers **Open in Window**, which opens the same room on the Jitsi server in
+its own window.
+
 ## Hosted Render deployment
 
 The hosted server is available at
@@ -71,6 +97,8 @@ The hosted server is available at
 - Health check path: `/healthz`
 - `ADDR=:10000`
 - `JOIN_BASE_URL=https://cowatch-2uvm.onrender.com`
+- `TRUST_PROXY=true` (Render's proxy terminates connections; without it every
+  user shares the proxy's address and its room-creation rate limit)
 
 After deploying or changing an environment variable, verify the public health
 endpoint:
@@ -273,7 +301,14 @@ Known limitations:
 - Verify play, pause, seek, drift correction, autoplay failure, and host
   departure.
 - Verify fullscreen overlay movement and background session recovery.
-- Verify Jitsi permissions, mic/camera controls, failure display, and retry.
+- Verify Jitsi against the configured domain: join, mic/camera toggles showing
+  their state, entering and leaving fullscreen without the call reloading,
+  a forced failure showing Try Again / Open in Window.
+- Verify page reload and next-episode navigation on both sides resume sync
+  without user action, and that an idle joiner stays connected for several
+  minutes (watch the background page in `about:debugging`).
+- Verify a streaming site (YouTube) and a plain mp4 page, play/pause/seek from
+  both host and joiner in an open room.
 - Verify keyboard navigation, narrow screens, and reduced-motion preference.
 - Run `make go-test-race`, `make verify`, and inspect the Firefox lint output.
 - Review `PRIVACY.md`, the pinned Jitsi checksum, version number, and release

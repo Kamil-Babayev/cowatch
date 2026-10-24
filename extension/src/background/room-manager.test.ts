@@ -1,45 +1,42 @@
-import { test, before, after, beforeEach } from 'node:test';
+import { test, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { WebSocketServer, type WebSocket as WSConnection } from 'ws';
-import type { RoomManager as RoomManagerClass, RoomManagerCallbacks } from './room-manager.ts';
+import type {
+  RoomManager as RoomManagerClass,
+  RoomManagerCallbacks,
+  RoomManagerOptions,
+  PlayerStateCause,
+} from './room-manager.ts';
+import type { AuthoritativePlayerState } from '../shared/player.ts';
 
 let wss: WebSocketServer;
-let serverURL: string;
 let RoomManager: typeof RoomManagerClass;
 let serverSockets: WSConnection[] = [];
-let serverReceived: unknown[] = [];
+let serverReceived: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+const managers: RoomManagerClass[] = [];
 
-function makeCallbacks(): RoomManagerCallbacks & {
-  remoteEvents: unknown[];
-  authoritativeStates: unknown[];
-  timeSyncs: unknown[];
-  denials: string[];
-  presences: unknown[];
-  connectionStates: string[];
-} {
-  const remoteEvents: unknown[] = [];
-  const authoritativeStates: unknown[] = [];
-  const timeSyncs: unknown[] = [];
+const source = { pageUrl: 'https://watch.example/movie', provider: 'native' as const, mediaKey: 'https://watch.example/movie' };
+
+function makeCallbacks() {
+  const states: Array<{ state: AuthoritativePlayerState; cause: PlayerStateCause }> = [];
   const denials: string[] = [];
-  const presences: unknown[] = [];
+  const closed: string[] = [];
   const connectionStates: string[] = [];
-  return {
-    remoteEvents,
-    authoritativeStates,
-    timeSyncs,
-    denials,
-    presences,
-    connectionStates,
-    onRemotePlayback: (e) => remoteEvents.push(e),
-    onAuthoritativeState: (state, source) => authoritativeStates.push({ state, source }),
-    onTimeSync: (state, timestamp) => timeSyncs.push({ state, timestamp }),
-    onPlayerState: (state) => authoritativeStates.push({ state, source: 'player' }),
-    onControlDenied: (r) => denials.push(r),
-    onPresence: (p) => presences.push(p),
+  const callbacks: RoomManagerCallbacks = {
+    onPlayerState: (state, cause) => states.push({ state, cause }),
+    onControlDenied: (reason) => denials.push(reason),
+    onPresence: () => undefined,
     onSession: () => undefined,
-    onRoomClosed: () => undefined,
+    onRoomClosed: (reason) => closed.push(reason),
     onConnectionState: (state) => connectionStates.push(state),
   };
+  return { callbacks, states, denials, closed, connectionStates };
+}
+
+function manager(options: RoomManagerOptions = {}): RoomManagerClass {
+  const created = new RoomManager({ reconnectDelays: [10], random: () => 0.5, ...options });
+  managers.push(created);
+  return created;
 }
 
 before(async () => {
@@ -47,16 +44,12 @@ before(async () => {
   await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
   const address = wss.address();
   const port = typeof address === 'object' && address ? address.port : 0;
-  serverURL = `http://localhost:${port}`;
-
   wss.on('connection', (socket: WSConnection) => {
     serverSockets.push(socket);
     socket.on('message', (data) => serverReceived.push(JSON.parse(data.toString())));
   });
-
-  (globalThis as unknown as { __SERVER_BASE_URL__: string }).__SERVER_BASE_URL__ = serverURL;
-  const mod = await import('./room-manager.ts');
-  RoomManager = mod.RoomManager;
+  (globalThis as unknown as { __SERVER_BASE_URL__: string }).__SERVER_BASE_URL__ = `http://localhost:${port}`;
+  RoomManager = (await import('./room-manager.ts')).RoomManager;
 });
 
 after(async () => {
@@ -69,249 +62,204 @@ beforeEach(() => {
   serverReceived = [];
 });
 
-function lastServerSocket(): WSConnection {
-  return serverSockets[serverSockets.length - 1];
-}
+afterEach(() => {
+  for (const created of managers.splice(0)) created.disconnectAll();
+});
 
-async function waitForServerSocket(): Promise<WSConnection> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const socket = lastServerSocket();
-    if (socket) return socket;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('timed out waiting for test WebSocket connection');
-}
-
-async function waitForCondition(
-  predicate: () => boolean,
-  message: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(message);
 }
 
-test('reportLocalEvent sends a correctly-shaped message to the server', async (t) => {
-  const manager = new RoomManager();
-  t.after(() => manager.disconnect(1));
+async function connected(
+  roomManager: RoomManagerClass,
+  tabId: number,
+  hostToken?: string,
+  session = { connectionId: 'me', isHost: Boolean(hostToken), controlMode: 'open' },
+) {
   const cb = makeCallbacks();
-  manager.connect(1, 'room-1', undefined, cb);
-  await waitForServerSocket();
-  await waitForCondition(
-    () => cb.connectionStates.includes('connected'),
-    'timed out waiting for the client WebSocket to open',
-  );
+  roomManager.connect(tabId, `room-${tabId}`, hostToken, cb.callbacks);
+  await waitFor(() => serverSockets.length > 0, 'no server socket');
+  await waitFor(() => cb.connectionStates.includes('connected'), 'client socket did not open');
+  const socket = serverSockets[serverSockets.length - 1];
+  socket.send(JSON.stringify({ type: 'session', payload: session, timestamp: Date.now() }));
+  await waitFor(() => roomManager.getSession(tabId)?.isHost === session.isHost, 'session not applied');
+  return { cb, socket };
+}
 
-  manager.reportLocalEvent(1, { type: 'play', currentTime: 12.3, isPlaying: true });
-  await waitForCondition(
-    () => serverReceived.some((message) => (message as { type: string }).type === 'play'),
-    'timed out waiting for the server to receive the playback event',
-  );
+function sent(type: string) {
+  return serverReceived.filter((message) => message.type === type);
+}
 
-  const playMsgs = serverReceived.filter((m) => (m as { type: string }).type === 'play');
-  assert.equal(playMsgs.length, 1);
-  assert.deepEqual((playMsgs[0] as { payload: unknown }).payload, { currentTime: 12.3, isPlaying: true });
-});
-
-test('a remote play message triggers onRemotePlayback with the right shape', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(2, 'room-2', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  (await waitForServerSocket()).send(
-    JSON.stringify({ type: 'play', payload: { currentTime: 5, isPlaying: true }, timestamp: Date.now() }),
-  );
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(cb.remoteEvents.length, 1);
-  assert.deepEqual(cb.remoteEvents[0], { type: 'play', currentTime: 5, isPlaying: true });
-
-  manager.disconnect(2);
-});
-
-test('stateResponse preserves playing state with the elapsed-time-corrected target', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(3, 'room-3', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  const stateTimestamp = Date.now() - 3000; // "3 seconds ago"
-  (await waitForServerSocket()).send(
-    JSON.stringify({
-      type: 'stateResponse',
-      payload: { currentTime: 100, isPlaying: true },
-      timestamp: stateTimestamp,
-    }),
-  );
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(cb.authoritativeStates.length, 1);
-  // ~103 seconds — allow slack for test-runner scheduling jitter
-  const result = cb.authoritativeStates[0] as {
-    state: { currentTime: number; isPlaying: boolean };
-    source: string;
-  };
-  assert.ok(result.state.currentTime >= 102.9 && result.state.currentTime <= 103.5);
-  assert.equal(result.state.isPlaying, true);
-  assert.equal(result.source, 'join');
-
-  manager.disconnect(3);
-});
-
-test('controlDenied reaches the callback with its reason', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(4, 'room-4', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  (await waitForServerSocket()).send(
-    JSON.stringify({ type: 'controlDenied', payload: { reason: 'host-only room' }, timestamp: Date.now() }),
-  );
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.deepEqual(cb.denials, ['host-only room']);
-  assert.ok(serverReceived.some((m) => (m as { type: string }).type === 'stateRequest'));
-  manager.disconnect(4);
-});
-
-test('timeSync is forwarded with its timestamp for content-side drift comparison', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(5, 'room-5', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  manager.reportLocalEvent(5, { type: 'play', currentTime: 100, isPlaying: true });
-  await new Promise((r) => setTimeout(r, 20));
-
-  (await waitForServerSocket()).send(
-    JSON.stringify({ type: 'timeSync', payload: { currentTime: 100.5, isPlaying: true }, timestamp: Date.now() }),
-  );
-  await new Promise((r) => setTimeout(r, 50));
-
-  assert.equal(cb.timeSyncs.length, 1);
-  manager.disconnect(5);
-});
-
-test('server session controls host heartbeat authority', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(6, 'room-6', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  (await waitForServerSocket()).send(
-    JSON.stringify({
-      type: 'session',
-      payload: { connectionId: 'host', isHost: true, controlMode: 'open' },
-      timestamp: Date.now(),
-    }),
-  );
-  await new Promise((r) => setTimeout(r, 50));
-  manager.reportHeartbeat(6, { currentTime: 104, isPlaying: true });
-  await new Promise((r) => setTimeout(r, 20));
-  assert.ok(serverReceived.some((m) => (m as { type: string }).type === 'timeSync'));
-  manager.disconnect(6);
-});
-
-test('connecting with a hostToken marks the session as host and sends periodic timeSync', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(7, 'room-7', 'a-real-host-token', cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  manager.reportLocalEvent(7, { type: 'play', currentTime: 50, isPlaying: true });
-  serverReceived = []; // clear the 'play' message we just sent, only care about timeSync below
-
-  // Rather than waiting the full 5s interval, verify indirectly: disconnect
-  // cleans up the timer without throwing, and the session was constructed
-  // as host (a hostToken was provided). The 5s interval itself is timing
-  // background work this test suite deliberately doesn't wait out.
-  manager.disconnect(7);
-  assert.ok(true, 'host session created and torn down without error');
-});
-
-test('disconnect is idempotent and stops delivering messages after', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(8, 'room-8', undefined, cb);
-  await new Promise((r) => setTimeout(r, 50));
-
-  manager.disconnect(8);
-  manager.disconnect(8); // second call should not throw
-
-  assert.ok(true);
-});
-
-test('revisioned player events use the latest server revision', async () => {
-  const manager = new RoomManager([10], () => 0.5);
-  const cb = makeCallbacks();
-  manager.connect(9, 'room-9', 'host-token', cb);
-  const socket = await waitForServerSocket();
-  socket.send(JSON.stringify({
-    type: 'session',
-    payload: { connectionId: 'host', isHost: true, controlMode: 'open' },
-    timestamp: Date.now(),
-  }));
-  socket.send(JSON.stringify({
-    type: 'playerState',
-    payload: {
-      revision: 3,
-      source: { pageUrl: 'https://watch.example/movie', provider: 'obrut', mediaKey: 'https://a.obrut.show/e' },
-      position: 20,
-      status: 'playing',
-    },
-    timestamp: Date.now(),
-  }));
-  await waitForCondition(
-    () => cb.authoritativeStates.some((item) => (item as { source: string }).source === 'player'),
-    'timed out waiting for player state',
-  );
-  manager.reportPlayerEvent(9, {
+test('player intents become playerCommands on the page URL', async () => {
+  const roomManager = manager();
+  await connected(roomManager, 1);
+  roomManager.reportPlayerEvent(1, {
     action: 'pause',
-    source: { pageUrl: 'https://frame.example', provider: 'obrut', mediaKey: 'https://a.obrut.show/e' },
+    source: { ...source, pageUrl: 'https://frame.example/embed' },
     position: 21,
     status: 'paused',
-  }, 'https://watch.example/movie');
-  await waitForCondition(
-    () => serverReceived.some((item) => (item as { type: string }).type === 'playerCommand'),
-    'timed out waiting for playerCommand',
-  );
-  const command = serverReceived.find((item) => (item as { type: string }).type === 'playerCommand') as {
-    payload: { baseRevision: number; source: { pageUrl: string }; action: string };
-  };
-  assert.equal(command.payload.baseRevision, 3);
-  assert.equal(command.payload.source.pageUrl, 'https://watch.example/movie');
-  assert.equal(command.payload.action, 'pause');
-  manager.disconnect(9);
+  }, source.pageUrl);
+  await waitFor(() => sent('playerCommand').length === 1, 'playerCommand not sent');
+  const payload = sent('playerCommand')[0].payload!;
+  assert.equal(payload.action, 'pause');
+  assert.equal(payload.position, 21);
+  assert.equal((payload.source as { pageUrl: string }).pageUrl, source.pageUrl);
+  assert.equal(typeof payload.commandId, 'string');
 });
 
-test('unexpected socket closure reconnects and requests authoritative state', async () => {
-  const manager = new RoomManager([10], () => 0.5);
-  const cb = makeCallbacks();
-  manager.connect(10, 'room-reconnect', undefined, cb);
-  const first = await waitForServerSocket();
-  await waitForCondition(() => cb.connectionStates.includes('connected'), 'first socket did not connect');
-  first.terminate();
-  await waitForCondition(() => cb.connectionStates.includes('reconnecting'), 'reconnecting state missing');
-  await waitForCondition(() => serverSockets.length >= 2, 'replacement socket did not connect');
-  await waitForCondition(
-    () => serverReceived.filter((item) => (item as { type: string }).type === 'stateRequest').length >= 2,
-    'replacement connection did not request state',
-  );
-  manager.disconnect(10);
+test('joiners never send heartbeats or source replacements', async () => {
+  const roomManager = manager();
+  await connected(roomManager, 2);
+  roomManager.reportPlayerEvent(2, { action: 'replace', source, position: 0, status: 'loading' });
+  roomManager.reportPlayerEvent(2, { action: 'buffering', source, position: 3, status: 'buffering' });
+  roomManager.reportPlayerHeartbeat(2, { source, position: 3, status: 'playing' });
+  roomManager.requestState(2);
+  await waitFor(() => sent('stateRequest').length >= 2, 'marker request not sent');
+  assert.equal(sent('playerCommand').length, 0);
+  assert.equal(sent('playerHeartbeat').length, 0);
+});
+
+test('host status events become heartbeats on the last seen revision', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 3, 'host-token');
+  socket.send(JSON.stringify({
+    type: 'playerState',
+    payload: { revision: 4, source, position: 10, status: 'paused', originConnectionId: 'guest' },
+    timestamp: Date.now(),
+  }));
+  await waitFor(() => cb.states.length === 1, 'state not delivered');
+  roomManager.reportPlayerEvent(3, { action: 'status', source, position: 11, status: 'playing' });
+  await waitFor(() => sent('playerHeartbeat').length === 1, 'heartbeat not sent');
+  assert.equal(sent('playerHeartbeat')[0].payload!.baseRevision, 4);
+  assert.equal(sent('playerHeartbeat')[0].payload!.status, 'playing');
+});
+
+test('own commands update the revision without being applied again', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 4, 'host-token');
+  socket.send(JSON.stringify({
+    type: 'playerState',
+    payload: { revision: 2, source, position: 5, status: 'playing', originConnectionId: 'me' },
+    timestamp: Date.now(),
+  }));
+  roomManager.requestState(4); // round trip marker
+  await waitFor(() => sent('stateRequest').length >= 2, 'marker not sent');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(cb.states.length, 0);
+  roomManager.reportPlayerHeartbeat(4, { source, position: 6, status: 'playing' });
+  await waitFor(() => sent('playerHeartbeat').length === 1, 'heartbeat not sent');
+  assert.equal(sent('playerHeartbeat')[0].payload!.baseRevision, 2);
+});
+
+test('heartbeat refreshes at the same revision apply in timestamp order', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 5);
+  const state = (position: number, timestamp: number, revision = 1) => socket.send(JSON.stringify({
+    type: 'playerState',
+    payload: { revision, source, position, status: 'playing', originConnectionId: 'host' },
+    timestamp,
+  }));
+  state(10, 1000);
+  state(15, 6000);
+  state(12, 3000); // older refresh arriving late
+  state(1, 9000, 0); // older revision
+  state(20, 11000);
+  await waitFor(() => cb.states.length === 3, 'refreshes not delivered');
+  assert.deepEqual(cb.states.map((item) => item.state.position), [10, 15, 20]);
+  assert.ok(cb.states.every((item) => item.cause === 'update'));
+});
+
+test('state timestamps are converted to the local clock', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 6);
+  await waitFor(() => sent('clockPing').length >= 1, 'no clock ping on connect');
+  const t0 = sent('clockPing')[0].payload!.t0 as number;
+  // The server's clock runs a minute ahead of ours.
+  socket.send(JSON.stringify({ type: 'clockPong', payload: { t0, serverTime: Date.now() + 60_000 }, timestamp: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const serverStamp = Date.now() + 60_000;
+  socket.send(JSON.stringify({
+    type: 'stateResponse',
+    payload: { revision: 3, source, position: 100, status: 'playing' },
+    timestamp: serverStamp,
+  }));
+  await waitFor(() => cb.states.length === 1, 'stateResponse not delivered');
+  const local = cb.states[0].state.timestamp;
+  assert.equal(cb.states[0].cause, 'sync');
+  assert.ok(Math.abs(local - (serverStamp - 60_000)) < 100, `converted ${local}`);
+});
+
+test('a controlDenied asks for state and marks the reply as a resync', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 7);
+  const before = sent('stateRequest').length;
+  socket.send(JSON.stringify({ type: 'controlDenied', payload: { reason: 'host-only room' }, timestamp: Date.now() }));
+  await waitFor(() => sent('stateRequest').length > before, 'no stateRequest after denial');
+  assert.deepEqual(cb.denials, ['host-only room']);
+  socket.send(JSON.stringify({
+    type: 'stateResponse',
+    payload: { revision: 1, source, position: 4, status: 'paused' },
+    timestamp: Date.now(),
+  }));
+  await waitFor(() => cb.states.length === 1, 'resync state not delivered');
+  assert.equal(cb.states[0].cause, 'resync');
+});
+
+test('an unanswered clock ping closes the dead socket and reconnects', async () => {
+  const roomManager = manager({ pongTimeoutMs: 30, clockIntervalMs: 10_000 });
+  const { cb } = await connected(roomManager, 8);
+  await waitFor(() => cb.connectionStates.includes('reconnecting'), 'dead socket not detected');
+  await waitFor(() => serverSockets.length >= 2, 'did not reconnect');
+  await waitFor(() => sent('stateRequest').length >= 2, 'replacement did not request state');
+});
+
+test('reconnecting to a room that no longer exists ends the session', async () => {
+  const checked: string[] = [];
+  const roomManager = manager({
+    roomCheckAfterAttempts: 0,
+    roomExists: async (roomId) => {
+      checked.push(roomId);
+      return false;
+    },
+  });
+  const { cb, socket } = await connected(roomManager, 9);
+  socket.terminate();
+  await waitFor(() => cb.closed.length === 1, 'room-gone not reported');
+  assert.deepEqual(cb.closed, ['room-gone']);
+  assert.deepEqual(checked, ['room-9']);
+  assert.equal(roomManager.getSession(9), undefined);
+});
+
+test('a room check that fails on the network keeps reconnecting', async () => {
+  const roomManager = manager({
+    roomCheckAfterAttempts: 0,
+    roomExists: async () => {
+      throw new Error('offline');
+    },
+  });
+  const { cb, socket } = await connected(roomManager, 10);
+  socket.terminate();
+  await waitFor(() => serverSockets.length >= 2, 'did not reconnect');
+  assert.deepEqual(cb.closed, []);
+});
+
+test('roomClosed is reported and ends the session', async () => {
+  const roomManager = manager();
+  const { cb, socket } = await connected(roomManager, 11);
+  socket.send(JSON.stringify({ type: 'roomClosed', payload: { reason: 'host-left' }, timestamp: Date.now() }));
+  await waitFor(() => cb.closed.length === 1, 'roomClosed not reported');
+  assert.deepEqual(cb.closed, ['host-left']);
+  assert.equal(roomManager.getSession(11), undefined);
 });
 
 test('explicit disconnect tells the server this is not a recoverable drop', async () => {
-  const manager = new RoomManager();
-  const cb = makeCallbacks();
-  manager.connect(11, 'room-leave', 'host-token', cb);
-  await waitForServerSocket();
-  await waitForCondition(() => cb.connectionStates.includes('connected'), 'socket did not connect');
-  manager.disconnect(11, true);
-  await waitForCondition(
-    () => serverReceived.some((item) => (item as { type: string }).type === 'leaveRoom'),
-    'leaveRoom was not sent',
-  );
+  const roomManager = manager();
+  await connected(roomManager, 12, 'host-token');
+  roomManager.disconnect(12, true);
+  roomManager.disconnect(12); // idempotent
+  await waitFor(() => sent('leaveRoom').length === 1, 'leaveRoom was not sent');
 });

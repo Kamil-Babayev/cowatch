@@ -27,7 +27,7 @@ func main() {
 	hub.OnRoomEmpty = rooms.Delete // rooms die on last-disconnect, not on a timer
 
 	mux := http.NewServeMux()
-	api.Register(mux, api.Deps{Rooms: rooms, Tokens: tokens, BaseURL: cfg.JoinBaseURL})
+	api.Register(mux, api.Deps{Rooms: rooms, Tokens: tokens, BaseURL: cfg.JoinBaseURL, TrustProxy: cfg.TrustProxy})
 	mux.Handle("GET /rooms/{roomId}/connect", ws.HandleConnect(hub, rooms, api.MakeCheckOrigin(cfg)))
 
 	srv := &http.Server{

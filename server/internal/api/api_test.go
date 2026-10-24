@@ -42,7 +42,7 @@ func TestHealthAndStaticPage(t *testing.T) {
 		t.Fatalf("health join base %q", got)
 	}
 	rec := request(t, mux, http.MethodGet, "/join-page/", "", nil)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "COWATCH") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "CoWatch") {
 		t.Fatalf("landing response %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -82,6 +82,16 @@ func TestCreateResolveAndMintRoom(t *testing.T) {
 	if fresh.JoinURL != "http://example.test/join-page/?token="+fresh.JoinToken {
 		t.Fatalf("bad fresh join URL %q", fresh.JoinURL)
 	}
+
+	lookup := request(t, mux, http.MethodGet, "/rooms/"+created.RoomID, "", nil)
+	var room roomResponse
+	if err := json.Unmarshal(lookup.Body.Bytes(), &room); err != nil || lookup.Code != http.StatusOK ||
+		room.RoomID != created.RoomID || room.ControlMode != "open" {
+		t.Fatalf("lookup %d %s", lookup.Code, lookup.Body.String())
+	}
+	if missing := request(t, mux, http.MethodGet, "/rooms/missing", "", nil); missing.Code != http.StatusNotFound {
+		t.Fatalf("missing room lookup %d", missing.Code)
+	}
 }
 
 func TestRoomValidationAndErrors(t *testing.T) {
@@ -116,7 +126,7 @@ func TestRoomValidationAndErrors(t *testing.T) {
 func TestRateLimiterAndClientIP(t *testing.T) {
 	limiter := newRateLimiter(1, time.Hour)
 	nextCalls := 0
-	handler := rateLimitMiddleware(limiter, func(w http.ResponseWriter, _ *http.Request) {
+	handler := rateLimitMiddleware(limiter, false, func(w http.ResponseWriter, _ *http.Request) {
 		nextCalls++
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -130,8 +140,18 @@ func TestRateLimiterAndClientIP(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests || nextCalls != 1 {
 		t.Fatalf("rate limit %d calls=%d", rec.Code, nextCalls)
 	}
-	if got := clientIP(&http.Request{RemoteAddr: "not-a-host-port"}); got != "not-a-host-port" {
+	if got := clientIP(&http.Request{RemoteAddr: "not-a-host-port"}, false); got != "not-a-host-port" {
 		t.Fatalf("clientIP %q", got)
+	}
+	proxied := &http.Request{RemoteAddr: "10.0.0.1:80", Header: http.Header{"X-Forwarded-For": {"203.0.113.9, 198.51.100.7"}}}
+	if got := clientIP(proxied, true); got != "198.51.100.7" {
+		t.Fatalf("trusted proxy clientIP %q", got)
+	}
+	if got := clientIP(proxied, false); got != "10.0.0.1" {
+		t.Fatalf("untrusted proxy clientIP %q", got)
+	}
+	if got := clientIP(&http.Request{RemoteAddr: "10.0.0.2:80", Header: http.Header{}}, true); got != "10.0.0.2" {
+		t.Fatalf("missing header clientIP %q", got)
 	}
 }
 
