@@ -10,7 +10,9 @@ import { JITSI_DOMAIN } from '../shared/config.ts';
 export type JitsiEvent =
   | { type: 'joined' }
   | { type: 'left' }
-  | { type: 'error'; message: string }
+  // `fatal` is Jitsi's own isFatal flag. A non-fatal error leaves the call
+  // running, e.g. while Jitsi waits for a moderator to sign in.
+  | { type: 'error'; message: string; fatal: boolean }
   | { type: 'audioMuted'; muted: boolean }
   | { type: 'videoMuted'; muted: boolean };
 
@@ -33,6 +35,22 @@ declare global {
       options: Record<string, unknown>,
     ) => JitsiExternalAPIInstance;
   }
+}
+
+const ERROR_MESSAGES: Record<string, string> = {
+  'conference.connectionError.membersOnly':
+    'Waiting for a moderator. Sign in on the Jitsi screen, or open the call in a window.',
+  'conference.authenticationRequired':
+    'This Jitsi server needs a moderator to sign in. Sign in on the Jitsi screen, or open the call in a window.',
+  'conference.connectionError.passwordRequired': 'This video chat is password protected.',
+  'connection.passwordRequired': 'This video chat is password protected.',
+  'connection.droppedError': 'The video chat connection dropped.',
+  'connection.otherError': 'Could not reach the video chat server.',
+};
+
+/** Turns a Jitsi error code into something a viewer can act on. */
+export function describeJitsiError(name: string | undefined): string {
+  return (name && ERROR_MESSAGES[name]) || 'Video chat error';
 }
 
 /** FNV-1a, for the rare page where crypto.subtle is unavailable. */
@@ -119,8 +137,8 @@ export async function injectJitsi(
   api.addListener('videoConferenceLeft', () => onEvent({ type: 'left' }));
   api.addListener('readyToClose', () => onEvent({ type: 'left' }));
   api.addListener('errorOccurred', (payload) => {
-    const error = (payload as { error?: { message?: string; name?: string } } | undefined)?.error;
-    onEvent({ type: 'error', message: error?.message || error?.name || 'Video chat error' });
+    const error = (payload as { error?: { name?: string; isFatal?: boolean } } | undefined)?.error;
+    onEvent({ type: 'error', message: describeJitsiError(error?.name), fatal: error?.isFatal === true });
   });
   api.addListener('audioMuteStatusChanged', (payload) =>
     onEvent({ type: 'audioMuted', muted: Boolean((payload as { muted?: boolean }).muted) }));

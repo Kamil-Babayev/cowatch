@@ -6,7 +6,7 @@ export const SERVER_BASE_URL =
     ? __SERVER_BASE_URL__
     : 'http://localhost:8080';
 export const JITSI_DOMAIN =
-  typeof __JITSI_DOMAIN__ === 'string' ? __JITSI_DOMAIN__ : 'meet.jit.si';
+  typeof __JITSI_DOMAIN__ === 'string' ? __JITSI_DOMAIN__ : 'localhost:8443';
 export const COWATCH_DEBUG =
   typeof __COWATCH_DEBUG__ === 'boolean' ? __COWATCH_DEBUG__ : false;
 

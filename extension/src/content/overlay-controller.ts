@@ -4,7 +4,12 @@ import type { RoomEndReason, ToBackgroundMessage, ToContentMessage } from '../sh
 import type { SessionPayload } from '../shared/messages.ts';
 import type { VideoSelection, VideoTabStatus } from '../shared/video-frames.ts';
 
-export type CallState = 'connecting' | 'joined' | 'failed';
+/**
+ * `waiting`: the call is still open, but needs the viewer — Jitsi is asking
+ * for a moderator login, or joining is taking unusually long — so the
+ * Jitsi screen is shown instead of being covered.
+ */
+export type CallState = 'connecting' | 'waiting' | 'joined' | 'failed';
 
 /** What the controller needs from the DOM; overlay-view.ts implements it. */
 export interface OverlayView {
@@ -42,13 +47,16 @@ export interface OverlayDeps {
 }
 
 export interface OverlayTiming {
-  /** How long the call may take to join before it is reported as failed. */
+  /** How long the call may take to join before the viewer is asked to help. */
   joinTimeoutMs: number;
   /** Interval of the keepalive that stops Firefox unloading the background. */
   keepaliveMs: number;
 }
 
 const DEFAULT_TIMING: OverlayTiming = { joinTimeoutMs: 20_000, keepaliveMs: 20_000 };
+
+const SLOW_JOIN_MESSAGE =
+  'Still connecting. If Jitsi asks you to sign in, do it here, or open the call in a window.';
 
 const END_MESSAGES: Record<RoomEndReason, string> = {
   'host-left': 'The host ended this room',
@@ -225,6 +233,14 @@ export class OverlayController {
     this.setCall('failed', message);
   }
 
+  /** Keeps the call open but uncovered, so the viewer can act on it. */
+  private waitForViewer(message: string): void {
+    if (this.joinTimer) clearTimeout(this.joinTimer);
+    this.joinTimer = null;
+    if (this.callState === 'joined') this.toast(message);
+    else this.setCall('waiting', message);
+  }
+
   private startCall(): void {
     const roomId = this.roomId;
     const view = this.view;
@@ -235,7 +251,7 @@ export class OverlayController {
     view.setMuted('audio', true);
     view.setMuted('video', true);
     this.joinTimer = setTimeout(() => {
-      if (generation === this.generation) this.failCall('Video chat did not connect');
+      if (generation === this.generation) this.waitForViewer(SLOW_JOIN_MESSAGE);
     }, this.timing.joinTimeoutMs);
 
     this.deps.injectJitsi(roomId, view.callSlot, (event) => {
@@ -269,7 +285,8 @@ export class OverlayController {
         this.view?.setMuted('video', event.muted);
         return;
       case 'error':
-        this.failCall(event.message);
+        if (event.fatal) this.failCall(event.message);
+        else this.waitForViewer(event.message);
         return;
       case 'left':
         this.failCall('Video chat ended');

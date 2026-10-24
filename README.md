@@ -50,7 +50,7 @@ in a local reverse proxy, set `JOIN_BASE_URL` to that HTTPS origin, and build
 the extension with matching configuration:
 
 ```sh
-SERVER_BASE_URL=https://localhost:8443 JITSI_DOMAIN=meet.jit.si npm --prefix extension run build
+SERVER_BASE_URL=https://localhost:8443 npm --prefix extension run build
 ```
 
 Load a production build manually from Firefox:
@@ -62,10 +62,11 @@ Load a production build manually from Firefox:
 
 ## Video chat: self-hosted Jitsi
 
-The overlay embeds a Jitsi call. Public `meet.jit.si` is only the
-development default: it limits meetings embedded in other sites to a short
-demo, and requires the first participant to sign in as moderator, which can't
-be done inside the overlay. For real use, run your own Jitsi Meet
+The overlay embeds a Jitsi call. Development builds use a local Jitsi at
+`localhost:8443` (see below). Public `meet.jit.si`, the fallback for release
+builds without a configured domain, limits meetings embedded in other sites to
+a short demo and requires the first participant to sign in as moderator (the
+overlay shows Jitsi's sign-in screen for that). For real use, run your own Jitsi Meet
 ([docker-jitsi-meet](https://github.com/jitsi/docker-jitsi-meet)) on a public
 HTTPS hostname and configure it to:
 
@@ -81,10 +82,38 @@ Then build the extension against it:
 JITSI_DOMAIN=meet.example.com npm --prefix extension run build
 ```
 
-The call starts with camera and microphone off. If a site's own security
-policy blocks the embedded call, the overlay reports it after 20 seconds and
-offers **Open in Window**, which opens the same room on the Jitsi server in
-its own window.
+The call starts with camera and microphone off. If Jitsi needs something from
+the viewer (a moderator sign-in) or the call hasn't joined after 20 seconds,
+for example because a site's own security policy blocks the embedded call,
+the overlay leaves the Jitsi screen visible and offers **Open in Window**,
+which opens the same room on the Jitsi server in its own window.
+
+### Local Jitsi for development
+
+A local [docker-jitsi-meet](https://github.com/jitsi/docker-jitsi-meet) is
+enough to test the call with two Firefox profiles on one machine:
+
+1. Download a release (for example `stable-11248-2`) and unpack it outside
+   this repository. Copy `env.example` to `.env` and run `./gen-passwords.sh`.
+2. In `.env`, set:
+
+   ```sh
+   CONFIG=C:/Users/you/.jitsi-meet-cfg   # an absolute path; ~ is not expanded on Windows
+   PUBLIC_URL=https://localhost:8443
+   JVB_ADVERTISE_IPS=127.0.0.1,YOUR_LAN_IP
+   JVB_COLIBRI_PORT=8081                 # keep 8080 free for the CoWatch server
+   ```
+
+3. Create the `CONFIG` folders (`web`, `transcripts`, `prosody/config`,
+   `prosody/prosody-plugins-custom`, `jicofo`, `jvb`, `jigasi`, `jibri`) and run
+   `docker compose up -d`.
+4. Open `https://localhost:8443` once in **each** Firefox profile and accept
+   the self-signed certificate; until then the embedded call cannot load.
+
+`make build` and `make dev` point at `localhost:8443` by default. To test
+from another machine on your network, build with
+`JITSI_DOMAIN=YOUR_LAN_IP:8443` instead, because `localhost` means each
+viewer's own computer.
 
 ## Hosted Render deployment
 
@@ -227,7 +256,7 @@ without NAT loopback.
 
    ```sh
    SERVER_BASE_URL=http://PUBLIC_IP:8080 \
-     JITSI_DOMAIN=meet.jit.si \
+     JITSI_DOMAIN=meet.example.com \
      npm --prefix extension run package
    ```
 
@@ -297,8 +326,8 @@ Known limitations:
 - Site-specific players may replace their `<video>` element; CoWatch
   re-detects candidates across accessible frames but cannot bypass site or
   browser restrictions.
-- `meet.jit.si` is a development default. Jitsi does not recommend the public
-  instance as the backend for production applications.
+- `meet.jit.si` is only the release fallback. Jitsi does not recommend the
+  public instance as the backend for production applications.
 
 ## Manual release checklist
 

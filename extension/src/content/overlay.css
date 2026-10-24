@@ -450,6 +450,21 @@
   background: var(--material-solid);
 }
 
+/* Leaves the Jitsi screen above it visible and clickable. */
+.call-message.waiting {
+  inset: auto 0 0;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  text-align: left;
+  border-top: 0.5px solid var(--separator);
+}
+
+.call-message.waiting .call-actions {
+  flex: none;
+}
+
 .call-message p {
   margin: 0;
   font-size: 12px;

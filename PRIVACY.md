@@ -24,8 +24,8 @@ metadata are sent directly to the Jitsi domain configured at extension build
 time. They are not routed through the CoWatch server. The Jitsi operator's
 privacy and retention practices apply.
 
-`meet.jit.si` is only the development default and is not recommended by Jitsi
-as a production application backend. A production operator should configure a
+`meet.jit.si` is only the fallback when no Jitsi domain is configured, and is
+not recommended by Jitsi as a production application backend. A production operator should configure a
 suitable Jitsi deployment and publish its privacy terms.
 
 ## Browser permissions
