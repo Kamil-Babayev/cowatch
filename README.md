@@ -124,13 +124,22 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.4` Phase 1 diagnostic version:
+`0.2.0` version:
 
 ```sh
 git push origin master
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.2.0
+git push origin v0.2.0
 ```
+
+Before the first release, set the repository variable `JITSI_DOMAIN`
+(**Settings → Secrets and variables → Actions → Variables**) to your
+self-hosted Jitsi domain; without it the build falls back to `meet.jit.si`,
+which only works as a short demo when embedded.
+
+`0.2.0` changed the room protocol. Deploy the server and hand out the
+matching extension together: a 0.1.x extension does not stay in sync with a
+0.2.0 server.
 
 When the workflow succeeds:
 
@@ -140,8 +149,8 @@ When the workflow succeeds:
 4. Choose **Load Temporary Add-on** and select the downloaded ZIP.
 
 The ZIP is unsigned, so Firefox removes the temporary installation when the
-browser restarts. The `v0.1.4` test workflow enables `[CoWatch debug]` frame
-and obrut handshake logs for playback acceptance testing. Permanent
+browser restarts. Release builds have debug logging off; build locally
+with `COWATCH_DEBUG=1` to get `[CoWatch debug]` logs. Permanent
 distribution requires Mozilla signing. If the
 server origin changes, update `JOIN_BASE_URL` on the server and
 `SERVER_BASE_URL` in `.github/workflows/package-extension.yml`, increment both
