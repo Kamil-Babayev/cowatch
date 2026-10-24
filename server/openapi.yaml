@@ -68,6 +68,33 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/InternalError"
+  /rooms/{roomId}:
+    get:
+      operationId: getRoom
+      summary: Check whether a room still exists
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: Room is active
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [roomId, controlMode]
+                properties:
+                  roomId:
+                    type: string
+                  controlMode:
+                    type: string
+                    enum: [open, host-only]
+        "404":
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /rooms/{roomId}/tokens:
     post:
       operationId: mintJoinToken

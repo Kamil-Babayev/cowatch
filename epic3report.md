@@ -58,3 +58,52 @@ separate.
   the selected frame/document.
 - Cross-origin embedded players are supported generically; no site-specific
   player rules were added.
+
+## Stabilization addendum (October 2026)
+
+Testing in real Firefox found the call, video detection and sync unreliable.
+Root causes and fixes:
+
+- **Sync never started on streaming sites.** `mediaKey` was `currentSrc`, a
+  `blob:` URL the server rejected. Native players are now keyed by
+  normalized page URL (`shared/page-key.ts`).
+- **The protocol fought itself.** Heartbeats bumped the revision, so user
+  commands were rejected and reverted. The host also applied its own echoed
+  heartbeats, and drift ignored clock skew. Commands are now last-writer-wins,
+  heartbeats keep the revision, states carry `originConnectionId`, and
+  `ClockOffset` (`shared/clock.ts`) converts server time.
+- **Detection lost the video.**
+  - Candidate ids repeated across reloads, so a reloaded page was never
+    activated.
+  - Auto-selection flipped to previews and ads.
+  - Shadow-DOM players were invisible.
+  - Probes blocked status requests and were never retried.
+  - The back/forward cache killed the agent.
+  - `frame-agent.ts` is now a tested `FrameAgent` class, and
+    `VideoCoordinator` serializes discovery and keeps selections sticky.
+- **Idle joiners lost the room** when Firefox unloaded the event page. Added
+  keepalives, restoring sessions on startup, a room-gone check
+  (`GET /rooms/{id}`) and dead-socket detection through unanswered clock pings.
+- **The call silently failed.**
+  - No Jitsi events were watched.
+  - Fullscreen reparenting reloaded the iframe.
+  - A Leave during injection left a stale handle that blocked every later
+    overlay.
+  - Room closure never tore the call down.
+  - `overlay-controller.ts` now owns the lifecycle with generation tokens.
+    The overlay is a top-layer popover. The deployment needs self-hosted
+    Jitsi (README).
+- **Room flow:**
+  - Room creation moved to the background (`createRoom`).
+  - A new join link replaces the tab's previous room.
+  - Reloads re-send session, presence and state.
+  - Following the host's page compares normalized URLs, once per source.
+  - The rate limiter can trust a reverse proxy (`TRUST_PROXY`).
+- **Removed** the legacy `play`/`pause`/`seeked`/`timeSync` relay and the
+  unused `VideoDetector`, `playback-events`, `playback-sync` and
+  `overlay-fullscreen` modules.
+- **Restyled** the popup, the in-page HUD and the landing page in the macOS
+  Monterey style, with automatic light/dark.
+
+Still unverified without real Firefox: the top-layer popover over fullscreen
+video, Jitsi against a self-hosted server, and event-page keepalive behavior.

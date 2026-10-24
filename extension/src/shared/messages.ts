@@ -7,18 +7,16 @@ import type { MediaSource } from './player.ts';
 export type MessageType =
   | 'session'
   | 'presence'
-  | 'play'
-  | 'pause'
-  | 'seeked'
-  | 'timeSync'
-  | 'stateRequest'
-  | 'stateResponse'
-  | 'controlDenied'
-  | 'roomClosed'
   | 'playerCommand'
   | 'playerHeartbeat'
   | 'playerState'
-  | 'leaveRoom';
+  | 'stateRequest'
+  | 'stateResponse'
+  | 'clockPing'
+  | 'clockPong'
+  | 'controlDenied'
+  | 'leaveRoom'
+  | 'roomClosed';
 
 export interface Message<T = unknown> {
   type: MessageType;
@@ -41,23 +39,18 @@ export interface SessionPayload {
   controlMode: 'open' | 'host-only';
 }
 
-export interface PlaybackPayload {
-  currentTime: number;
-  isPlaying: boolean;
-}
+export type RoomPlayerStatus = 'playing' | 'paused' | 'buffering' | 'ended';
 
+/** Cached room state; the envelope timestamp is when it was true. */
 export interface StateResponsePayload {
-  currentTime: number;
-  isPlaying: boolean;
-  revision?: number;
-  source?: MediaSource;
-  position?: number;
-  status?: 'playing' | 'paused' | 'buffering' | 'ended';
+  revision: number;
+  source: MediaSource;
+  position: number;
+  status: RoomPlayerStatus;
 }
 
 export interface PlayerCommandPayload {
   commandId: string;
-  baseRevision: number;
   action: 'play' | 'pause' | 'seek' | 'replace';
   source: MediaSource;
   position: number;
@@ -67,15 +60,25 @@ export interface PlayerHeartbeatPayload {
   baseRevision: number;
   source: MediaSource;
   position: number;
-  status: 'playing' | 'paused' | 'buffering' | 'ended';
+  status: RoomPlayerStatus;
 }
 
 export interface PlayerStatePayload {
   revision: number;
   source: MediaSource;
   position: number;
-  status: 'playing' | 'paused' | 'buffering' | 'ended';
+  status: RoomPlayerStatus;
   commandId?: string;
+  originConnectionId: string;
+}
+
+export interface ClockPingPayload {
+  t0: number;
+}
+
+export interface ClockPongPayload {
+  t0: number;
+  serverTime: number;
 }
 
 export interface ControlDeniedPayload {

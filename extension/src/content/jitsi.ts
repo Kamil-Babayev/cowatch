@@ -1,15 +1,18 @@
 import { JITSI_DOMAIN } from '../shared/config.ts';
 
 /**
- * Jitsi IFrame API embed — US-2.14.
- *
- * This module cannot be verified in this sandbox at all: it needs a real
- * network path to meet.jit.si (not in this project's allowed domains
- * list even if it were reachable here) and a real getUserMedia-capable
- * browser. Everything below is written to match Jitsi's documented
- * IFrame API shape, but treat it as unverified until checked by hand in
- * actual Firefox.
+ * Jitsi IFrame API embed. It needs a Jitsi deployment that allows anonymous
+ * rooms and being framed by other sites: public meet.jit.si limits embedded
+ * meetings to a short demo and asks for a moderator login, so production
+ * builds point JITSI_DOMAIN at a self-hosted server (see README.md).
  */
+
+export type JitsiEvent =
+  | { type: 'joined' }
+  | { type: 'left' }
+  | { type: 'error'; message: string }
+  | { type: 'audioMuted'; muted: boolean }
+  | { type: 'videoMuted'; muted: boolean };
 
 export interface JitsiHandle {
   toggleAudio(): void;
@@ -19,6 +22,7 @@ export interface JitsiHandle {
 
 interface JitsiExternalAPIInstance {
   executeCommand(command: string): void;
+  addListener(event: string, listener: (payload: unknown) => void): void;
   dispose(): void;
 }
 
@@ -31,67 +35,97 @@ declare global {
   }
 }
 
+/** FNV-1a, for the rare page where crypto.subtle is unavailable. */
+function fallbackHash(input: string): string {
+  let out = '';
+  for (let seed = 0; seed < 4; seed += 1) {
+    let hash = 0x811c9dc5 ^ seed;
+    for (let i = 0; i < input.length; i += 1) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    out += hash.toString(16).padStart(8, '0');
+  }
+  return out;
+}
+
 /**
- * Derives a Jitsi room name from our roomId via SHA-256 rather than using
- * roomId directly — our roomId is treated as "an identifier, not a
- * secret" (see idgen.ts), but a Jitsi room name is effectively public on
- * Jitsi's own infrastructure (anyone who has it can join the call
- * directly through Jitsi's own web UI, bypassing our server entirely).
- * Keeping the two values unlinkable is cheap defense in depth.
+ * Derives the Jitsi room name from our roomId via SHA-256 rather than using
+ * roomId directly — a Jitsi room name is effectively public on the Jitsi
+ * server (anyone who has it can join through Jitsi's own UI), so keeping
+ * the two unlinkable is cheap defense in depth.
  */
-async function deriveJitsiRoomName(roomId: string): Promise<string> {
-  const data = new TextEncoder().encode(`cowatch-jitsi:${roomId}`);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer))
+export async function jitsiRoomName(roomId: string): Promise<string> {
+  const input = `cowatch-jitsi:${roomId}`;
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return fallbackHash(input);
+  const hash = await subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, 32);
 }
 
-/**
- * Injects the Jitsi IFrame API and starts a call for this room. The
- * generated iframe needs camera/mic permission delegation
- * (`allow="camera *; microphone *; display-capture *"`) — Jitsi's own
- * IFrame API sets this on the iframe it creates; if getUserMedia fails
- * silently when verifying this by hand, that attribute is the first
- * thing to check.
- */
-/**
- * Injects the Jitsi IFrame API and starts a call for this room. The
- * generated iframe needs camera/mic permission delegation
- * (`allow="camera *; microphone *; display-capture *"`) — Jitsi's own
- * IFrame API sets this on the iframe it creates; if getUserMedia fails
- * silently when verifying this by hand, that attribute is the first
- * thing to check.
- *
- * `parentNode` lets US-3.2 pass its shadow-DOM slot directly, so the
- * iframe lives inside the overlay's shadow root rather than loose in
- * `document.body`. Falls back to creating (and appending) its own div if
- * omitted, for any caller that doesn't need shadow-DOM placement.
- */
-export async function injectJitsi(roomId: string, parentNode?: HTMLElement): Promise<JitsiHandle> {
-  const jitsiRoomName = await deriveJitsiRoomName(roomId);
+/** The same call, opened directly on the Jitsi server in its own window. */
+export async function jitsiRoomUrl(roomId: string): Promise<string> {
+  return `https://${JITSI_DOMAIN}/${await jitsiRoomName(roomId)}`;
+}
 
-  const container =
-    parentNode ??
-    (() => {
-      const div = document.createElement('div');
-      div.id = 'cowatch-jitsi-container';
-      document.body.appendChild(div);
-      return div;
-    })();
-
+/**
+ * Starts the call for this room inside `parentNode`. The iframe Jitsi's API
+ * creates carries `allow="camera; microphone; display-capture; autoplay"`
+ * itself. Everything after the iframe is created — joining, failures,
+ * mute changes — arrives through `onEvent`.
+ */
+export async function injectJitsi(
+  roomId: string,
+  parentNode: HTMLElement,
+  onEvent: (event: JitsiEvent) => void,
+  displayName = 'CoWatch viewer',
+): Promise<JitsiHandle> {
+  const roomName = await jitsiRoomName(roomId);
   const ExternalAPI = window.JitsiMeetExternalAPI;
   if (!ExternalAPI) {
     throw new Error('JitsiMeetExternalAPI failed to load');
   }
 
   const api = new ExternalAPI(JITSI_DOMAIN, {
-    roomName: jitsiRoomName,
-    parentNode: container,
+    roomName,
+    parentNode,
     width: '100%',
     height: '100%',
+    userInfo: { displayName },
+    configOverwrite: {
+      // The tile is small and the overlay has its own controls: skip the
+      // lobby-style pre-join screen and the app download prompts.
+      prejoinConfig: { enabled: false },
+      prejoinPageEnabled: false,
+      disableDeepLinking: true,
+      // Nobody is put on camera or microphone without asking.
+      startWithAudioMuted: true,
+      startWithVideoMuted: true,
+      toolbarButtons: [],
+      hideConferenceSubject: true,
+      disableInviteFunctions: true,
+    },
+    interfaceConfigOverwrite: {
+      SHOW_JITSI_WATERMARK: false,
+      SHOW_WATERMARK_FOR_GUESTS: false,
+      MOBILE_APP_PROMO: false,
+    },
   });
+
+  api.addListener('videoConferenceJoined', () => onEvent({ type: 'joined' }));
+  api.addListener('videoConferenceLeft', () => onEvent({ type: 'left' }));
+  api.addListener('readyToClose', () => onEvent({ type: 'left' }));
+  api.addListener('errorOccurred', (payload) => {
+    const error = (payload as { error?: { message?: string; name?: string } } | undefined)?.error;
+    onEvent({ type: 'error', message: error?.message || error?.name || 'Video chat error' });
+  });
+  api.addListener('audioMuteStatusChanged', (payload) =>
+    onEvent({ type: 'audioMuted', muted: Boolean((payload as { muted?: boolean }).muted) }));
+  api.addListener('videoMuteStatusChanged', (payload) =>
+    onEvent({ type: 'videoMuted', muted: Boolean((payload as { muted?: boolean }).muted) }));
 
   return {
     toggleAudio: () => api.executeCommand('toggleAudio'),

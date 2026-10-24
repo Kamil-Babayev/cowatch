@@ -60,6 +60,25 @@ func handleCreateRoom(deps Deps) http.HandlerFunc {
 	}
 }
 
+type roomResponse struct {
+	RoomID      string `json:"roomId"`
+	ControlMode string `json:"controlMode"`
+}
+
+// handleGetRoom lets a client that lost its socket tell "room is gone" apart
+// from "network is down" — a browser WebSocket cannot see the 404 its
+// upgrade request got.
+func handleGetRoom(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		room, ok := deps.Rooms.Get(r.PathValue("roomId"))
+		if !ok {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "room not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, roomResponse{RoomID: room.ID, ControlMode: room.ControlMode})
+	}
+}
+
 type mintTokenResponse struct {
 	JoinToken string `json:"joinToken"`
 	JoinURL   string `json:"joinUrl"`

@@ -1,13 +1,13 @@
-import type { PlaybackEvent } from '../content/playback-events.ts';
-import type { PresencePayload } from './messages.ts';
-import type { PlaybackPayload, SessionPayload } from './messages.ts';
+import type { PresencePayload, SessionPayload } from './messages.ts';
 import type { VideoSelection } from './video-frames.ts';
 import type { AuthoritativePlayerState, PlayerEvent, PlayerSnapshot } from './player.ts';
+import type { ControlMode } from './api-client.ts';
 
-/** Content script -> background */
+/** Why a tab's room session ended, as shown to the user. */
+export type RoomEndReason = 'host-left' | 'server-shutdown' | 'room-gone' | 'left';
+
+/** Content script / popup -> background */
 export type ToBackgroundMessage =
-  | { kind: 'localPlaybackEvent'; event: PlaybackEvent }
-  | { kind: 'playbackHeartbeat'; state: PlaybackPayload }
   | { kind: 'localPlayerEvent'; event: PlayerEvent }
   | { kind: 'playerHeartbeat'; state: PlayerSnapshot }
   | { kind: 'playerAdapterStatus'; status: string; message?: string }
@@ -16,26 +16,32 @@ export type ToBackgroundMessage =
   | { kind: 'queryVideoCandidates'; tabId?: number }
   | { kind: 'selectVideoCandidate'; selection: VideoSelection }
   | { kind: 'clearVideoSelection' }
-  // US-2.11: landing-bridge content script telling background the user
-  // clicked "continue" on a resolved join link.
+  // Landing-bridge content script: the user clicked "continue" on a
+  // resolved join link.
   | { kind: 'joinRequested'; roomId: string; videoUrl: string }
-  // US-2.5: popup, after it already created/resolved a room via the
-  // server's REST API directly — background's only job from here is to
-  // actually open the WebSocket for this tab.
+  // Popup: create a room for this tab. Runs in the background so closing
+  // the popup mid-request cannot leave a room nobody is connected to.
+  // Replies with a CreateRoomReply.
+  | { kind: 'createRoom'; tabId: number; videoUrl: string; controlMode: ControlMode }
+  // Popup, reopening on a tab whose room it already knows about.
   | { kind: 'connectRoom'; roomId: string; hostToken?: string; tabId?: number }
   | { kind: 'leaveRoom'; tabId?: number }
-  | { kind: 'extensionInstalledCheck' } // US-2.10, sent by the landing-bridge script
-  // US-2.11: sent by the generic content script on every page load to ask
-  // "was I just navigated here as part of a join handoff?" — content
-  // scripts have no synchronous way to learn their own tabId
-  // (browser.tabs.getCurrent() isn't available there), so background
-  // answers using sender.tab.id, which it does have.
+  // Sent by the top-frame content script on every page load to ask "am I
+  // part of a room?" — content scripts cannot learn their own tabId, so
+  // background answers using sender.tab.id.
   | { kind: 'checkPendingJoin' }
-  // US-3.2: the in-page overlay's Copy Link button needs a fresh join
-  // link, but only background retains the hostToken (via RoomManager's
-  // session state) needed to call the server's mint-token endpoint — the
-  // content script itself never has it.
+  // Top-frame content script, every 20 s while in a room. Firefox unloads
+  // an idle MV3 event page (and its WebSockets) after ~30 s; any runtime
+  // message resets that timer.
+  | { kind: 'keepalive' }
+  // The overlay's Copy Link button: only background holds the hostToken
+  // needed to mint a fresh join link.
   | { kind: 'requestFreshLink' };
+
+export interface CreateRoomReply {
+  roomId: string;
+  joinUrl: string;
+}
 
 /** Background -> content script (for a specific tab) */
 export type ToContentMessage =
@@ -43,32 +49,21 @@ export type ToContentMessage =
   | { kind: 'activateVideoCandidate'; candidateId: string }
   | { kind: 'deactivateVideoCandidate' }
   | { kind: 'playbackApplyFailed' }
-  | { kind: 'remotePlaybackEvent'; event: PlaybackEvent }
-  | {
-      kind: 'authoritativeState';
-      currentTime: number;
-      isPlaying: boolean;
-      source: 'join' | 'control-denied';
-    }
-  | { kind: 'timeSync'; state: PlaybackPayload; timestamp: number }
   | { kind: 'applyPlayerState'; state: AuthoritativePlayerState }
   | { kind: 'controlDenied'; reason: string }
+  // The authoritative state that follows a controlDenied was applied.
+  | { kind: 'resynced' }
   | { kind: 'presenceUpdate'; payload: PresencePayload }
   | { kind: 'sessionInfo'; payload: SessionPayload }
   | { kind: 'connectionState'; state: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' }
   | { kind: 'playerAdapterStatus'; status: string; message?: string }
-  | { kind: 'roomClosed'; reason: 'host-left' | 'server-shutdown' }
-  | { kind: 'extensionInstalledResponse' } // reply to extensionInstalledCheck
-  | { kind: 'pendingJoinResult'; roomId: string | null } // reply to checkPendingJoin
-  // Sent right after connectRoom succeeds, on BOTH the host path (popup ->
-  // connectRoom directly) and the joiner path (pendingJoinResult ->
-  // connectRoom) — content/index.ts needs its own roomId either way to
-  // derive a matching Jitsi room name (US-2.14), and only background
-  // reliably knows it on both paths.
+  // The tab is (still) in this room — sent on connect and again whenever a
+  // reloaded page asks, so the overlay can build itself and derive the
+  // Jitsi room name on both the host and the joiner path.
   | { kind: 'roomConnected'; roomId: string }
-  // Replies to requestFreshLink. Split into two variants rather than one
-  // with an optional error field — a non-host tab (or one whose session
-  // vanished) has no hostToken to mint with at all, which is worth
-  // distinguishing from an actual network/server failure.
+  // The tab's room session is over: tear down the overlay and the call.
+  | { kind: 'roomEnded'; reason: RoomEndReason }
+  // Replies to requestFreshLink. A non-host tab has no hostToken to mint
+  // with at all, which is worth distinguishing from a network failure.
   | { kind: 'freshLinkResult'; joinUrl: string }
   | { kind: 'freshLinkError'; message: string };

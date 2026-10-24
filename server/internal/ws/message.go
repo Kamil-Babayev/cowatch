@@ -11,20 +11,18 @@ type Message struct {
 }
 
 const (
-	MsgPlayerCommand   = "playerCommand"
-	MsgPlayerHeartbeat = "playerHeartbeat"
-	MsgPlayerState     = "playerState"
-	MsgLeaveRoom       = "leaveRoom"
-	MsgSession         = "session"       // server → client, identifies this connection
-	MsgPresence        = "presence"      // server → clients
-	MsgPlay            = "play"          // client → server → clients
-	MsgPause           = "pause"         // client → server → clients
-	MsgSeeked          = "seeked"        // client → server → clients
-	MsgTimeSync        = "timeSync"      // client → server → clients
-	MsgStateRequest    = "stateRequest"  // client → server
-	MsgStateResponse   = "stateResponse" // server → client (direct, not broadcast)
-	MsgControlDenied   = "controlDenied" // server → client, unicast
-	MsgRoomClosed      = "roomClosed"    // server → clients before the socket closes
+	MsgSession         = "session"         // server → client, identifies this connection
+	MsgPresence        = "presence"        // server → clients
+	MsgPlayerCommand   = "playerCommand"   // client → server, an explicit user action
+	MsgPlayerHeartbeat = "playerHeartbeat" // host → server, periodic position report
+	MsgPlayerState     = "playerState"     // server → clients, the authoritative state
+	MsgStateRequest    = "stateRequest"    // client → server
+	MsgStateResponse   = "stateResponse"   // server → client (direct, not broadcast)
+	MsgClockPing       = "clockPing"       // client → server
+	MsgClockPong       = "clockPong"       // server → client (direct)
+	MsgControlDenied   = "controlDenied"   // server → client, unicast
+	MsgLeaveRoom       = "leaveRoom"       // client → server, explicit departure
+	MsgRoomClosed      = "roomClosed"      // server → clients before the socket closes
 )
 
 // SessionPayload declares authority for the receiving connection.
@@ -39,12 +37,6 @@ type ControlDeniedPayload struct {
 	Reason string `json:"reason"`
 }
 
-// PlaybackPayload is a complete playback position and play/pause snapshot.
-type PlaybackPayload struct {
-	CurrentTime float64 `json:"currentTime"`
-	IsPlaying   bool    `json:"isPlaying"`
-}
-
 // PresenceEntry identifies one connected room participant.
 type PresenceEntry struct {
 	ConnID string `json:"connId"`
@@ -56,14 +48,13 @@ type PresencePayload struct {
 	Connections []PresenceEntry `json:"connections"`
 }
 
-// StateResponsePayload contains the cached authoritative playback state.
+// StateResponsePayload is the cached authoritative player state, sent to a
+// client that asked for it. Its envelope timestamp is when the state was true.
 type StateResponsePayload struct {
-	CurrentTime float64             `json:"currentTime"`
-	IsPlaying   bool                `json:"isPlaying"`
-	Revision    uint64              `json:"revision,omitempty"`
-	Source      *MediaSourcePayload `json:"source,omitempty"`
-	Position    float64             `json:"position,omitempty"`
-	Status      string              `json:"status,omitempty"`
+	Revision uint64             `json:"revision"`
+	Source   MediaSourcePayload `json:"source"`
+	Position float64            `json:"position"`
+	Status   string             `json:"status"`
 }
 
 type MediaSourcePayload struct {
@@ -73,11 +64,10 @@ type MediaSourcePayload struct {
 }
 
 type PlayerCommandPayload struct {
-	CommandID    string             `json:"commandId"`
-	BaseRevision uint64             `json:"baseRevision"`
-	Action       string             `json:"action"`
-	Source       MediaSourcePayload `json:"source"`
-	Position     float64            `json:"position"`
+	CommandID string             `json:"commandId"`
+	Action    string             `json:"action"`
+	Source    MediaSourcePayload `json:"source"`
+	Position  float64            `json:"position"`
 }
 
 type PlayerHeartbeatPayload struct {
@@ -88,11 +78,24 @@ type PlayerHeartbeatPayload struct {
 }
 
 type PlayerStatePayload struct {
-	Revision  uint64             `json:"revision"`
-	Source    MediaSourcePayload `json:"source"`
-	Position  float64            `json:"position"`
-	Status    string             `json:"status"`
-	CommandID string             `json:"commandId,omitempty"`
+	Revision           uint64             `json:"revision"`
+	Source             MediaSourcePayload `json:"source"`
+	Position           float64            `json:"position"`
+	Status             string             `json:"status"`
+	CommandID          string             `json:"commandId,omitempty"`
+	OriginConnectionID string             `json:"originConnectionId"`
+}
+
+// ClockPingPayload carries the client's send time so it can measure its
+// offset from the server clock.
+type ClockPingPayload struct {
+	T0 float64 `json:"t0"`
+}
+
+// ClockPongPayload echoes T0 with the server's current time in unix millis.
+type ClockPongPayload struct {
+	T0         float64 `json:"t0"`
+	ServerTime int64   `json:"serverTime"`
 }
 
 // RoomClosedPayload explains why a room is no longer active.

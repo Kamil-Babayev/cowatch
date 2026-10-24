@@ -1,456 +1,341 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMessageRouter, type TabsAPI, type SessionStorageAPI, type LinkMinter } from './message-router.ts';
-import { VideoCoordinator } from './video-coordinator.ts';
+import {
+  createMessageRouter,
+  type RoomAPI,
+  type RoomControl,
+  type SessionStorageAPI,
+  type TabsAPI,
+  type VideoRouting,
+} from './message-router.ts';
+import type { RoomManagerCallbacks, SessionInfo } from './room-manager.ts';
+import type { ToContentMessage } from '../shared/runtime-messages.ts';
+import type { AuthoritativePlayerState } from '../shared/player.ts';
+import type { VideoSelection } from '../shared/video-frames.ts';
 
-function makeFakeRoomManager(sessions: Record<number, { roomId: string; hostToken?: string; isHost: boolean }> = {}) {
-  const calls: { method: string; args: unknown[] }[] = [];
-  return {
+const PAGE = 'https://example.com/watch?v=1';
+
+function fakeRoomManager() {
+  const sessions = new Map<number, SessionInfo & { callbacks: RoomManagerCallbacks }>();
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  const manager: RoomControl & { calls: typeof calls; callbacks: (tabId: number) => RoomManagerCallbacks } = {
     calls,
-    connect: (...args: unknown[]) => calls.push({ method: 'connect', args }),
-    disconnect: (...args: unknown[]) => calls.push({ method: 'disconnect', args }),
-    reportLocalEvent: (...args: unknown[]) => calls.push({ method: 'reportLocalEvent', args }),
-    reportHeartbeat: (...args: unknown[]) => calls.push({ method: 'reportHeartbeat', args }),
-    requestState: (...args: unknown[]) => calls.push({ method: 'requestState', args }),
-    getSession: (tabId: number) => sessions[tabId],
+    callbacks: (tabId) => sessions.get(tabId)!.callbacks,
+    connect: (tabId, roomId, hostToken, callbacks) => {
+      calls.push({ method: 'connect', args: [tabId, roomId, hostToken] });
+      sessions.set(tabId, { roomId, hostToken, isHost: Boolean(hostToken), controlMode: null, callbacks });
+    },
+    disconnect: (tabId, explicit) => {
+      calls.push({ method: 'disconnect', args: [tabId, explicit] });
+      sessions.delete(tabId);
+    },
+    getSession: (tabId) => sessions.get(tabId),
+    requestState: (tabId) => calls.push({ method: 'requestState', args: [tabId] }),
+    reportPlayerEvent: (...args) => calls.push({ method: 'reportPlayerEvent', args }),
+    reportPlayerHeartbeat: (...args) => calls.push({ method: 'reportPlayerHeartbeat', args }),
   };
+  return manager;
 }
 
-function makeFakeLinkMinter(
-  impl: (roomId: string, hostToken: string) => Promise<{ joinUrl: string; joinToken: string }> = async (
-    _roomId,
-    _hostToken,
-  ) => ({ joinUrl: 'http://x/join-page/?token=fresh', joinToken: 'fresh' }),
-): LinkMinter & { calls: unknown[] } {
-  const calls: unknown[] = [];
-  return {
-    calls,
-    mintFreshLink: (roomId, hostToken) => {
-      calls.push({ roomId, hostToken });
-      return impl(roomId, hostToken);
+function fakeVideos(selectedFrame: number | null = 0) {
+  const toTop: ToContentMessage[] = [];
+  const toSelected: ToContentMessage[] = [];
+  let listener: (tabId: number, selection: VideoSelection | null) => void = () => undefined;
+  const videos: VideoRouting & {
+    toTop: ToContentMessage[];
+    toSelected: ToContentMessage[];
+    fireSelection: (tabId: number, selection: VideoSelection | null) => void;
+    topFails: boolean;
+    navigations: number[][];
+  } = {
+    toTop,
+    toSelected,
+    topFails: false,
+    navigations: [],
+    fireSelection: (tabId, selection) => listener(tabId, selection),
+    discover: async () => ({
+      status: { hasVideo: true, candidates: [], selected: null },
+      selectionChanged: false,
+    }),
+    select: async (_tabId, selection) => ({ hasVideo: true, candidates: [], selected: selection, manual: true }),
+    clearManualSelection: async () => ({
+      status: { hasVideo: true, candidates: [], selected: null, manual: false },
+      selectionChanged: false,
+    }),
+    isSelected: (_tabId, frameId = 0) => frameId === selectedFrame,
+    sendToSelected: async (_tabId, message) => {
+      toSelected.push(message);
+      return selectedFrame !== null;
+    },
+    sendToTop: async (_tabId, message) => {
+      if (videos.topFails) throw new Error('no receiver');
+      toTop.push(message);
+    },
+    clear: () => undefined,
+    onSelectionChanged: (next) => {
+      listener = next;
+    },
+    handleNavigation: (tabId, frameId) => {
+      videos.navigations.push([tabId, frameId]);
     },
   };
+  return videos;
 }
 
-function makeFakeTabs(): TabsAPI & { sent: unknown[]; updated: unknown[] } {
-  const sent: unknown[] = [];
-  const updated: unknown[] = [];
-  return {
-    sent,
-    updated,
-    sendMessage: (tabId, message) => {
-      sent.push({ tabId, message });
-    },
-    update: (tabId, props) => {
-      updated.push({ tabId, props });
-    },
-    get: async () => ({ url: 'https://example.com/watch' }),
-  };
-}
-
-function makeFakeSessionStorage(): SessionStorageAPI & { stored: Record<string, unknown> } {
-  const stored: Record<string, unknown> = {};
-  return {
+function fakeStorage(initial: Record<string, unknown> = {}) {
+  const stored: Record<string, unknown> = { ...initial };
+  const storage: SessionStorageAPI & { stored: Record<string, unknown> } = {
     stored,
     set: (items) => {
       Object.assign(stored, items);
     },
-    get: (keys) => {
-      const result: Record<string, unknown> = {};
-      for (const key of keys) result[key] = stored[key];
-      return result;
-    },
+    get: (keys) => Object.fromEntries(keys.map((key) => [key, stored[key]])),
+    getAll: () => ({ ...stored }),
     remove: (keys) => {
       for (const key of keys) delete stored[key];
     },
   };
+  return storage;
 }
 
-test('ignores messages with no tab id (not from a content script)', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'leaveRoom' }, {});
-
-  assert.equal(roomManager.calls.length, 0);
-});
-
-test('localPlaybackEvent forwards to roomManager.reportLocalEvent with the right tabId', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  const event = { type: 'play' as const, currentTime: 5, isPlaying: true };
-  await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 } });
-
-  assert.deepEqual(roomManager.calls, [{ method: 'reportLocalEvent', args: [42, event] }]);
-});
-
-test('ignores playback messages from a frame that is not selected', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const videos = new VideoCoordinator(
-    {
-      async sendMessage(_tabId, message, options) {
-        if (message.kind === 'frameVideoStatusRequest' && options?.frameId === 2) {
-          return {
-            candidates: [{
-              candidateId: 'movie',
-              width: 800,
-              height: 450,
-              visibleArea: 360_000,
-              currentTime: 0,
-              isPlaying: false,
-            }],
-            childFrames: [],
-          };
-        }
-        return undefined;
-      },
+function fakeTabs(url = PAGE, existing = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 42])) {
+  const updated: Array<{ tabId: number; url: string }> = [];
+  const tabs: TabsAPI & { updated: typeof updated; url: string } = {
+    updated,
+    url,
+    update: (tabId, props) => {
+      updated.push({ tabId, url: props.url });
     },
-    {
-      async getAllFrames() {
-        return [{ frameId: 2, parentFrameId: -1 }];
-      },
+    get: async (tabId) => {
+      if (!existing.has(tabId)) throw new Error('no tab');
+      return { url: tabs.url };
     },
-  );
-  await videos.discover(42);
-  const handle = createMessageRouter(
-    roomManager as never,
-    tabs,
-    storage,
-    makeFakeLinkMinter(),
-    videos,
-  );
-  const event = { type: 'play' as const, currentTime: 5, isPlaying: true };
+  };
+  return tabs;
+}
 
-  await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 }, frameId: 0 });
-  await handle({ kind: 'localPlaybackEvent', event }, { tab: { id: 42 }, frameId: 2 });
-
-  assert.deepEqual(roomManager.calls, [
-    { method: 'reportLocalEvent', args: [42, event] },
-  ]);
-});
-
-test('popup video query uses its explicit tab id', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const videos = new VideoCoordinator(
-    {
-      async sendMessage(_tabId, message) {
-        if (message.kind === 'frameVideoStatusRequest') {
-          return {
-            candidates: [{
-              candidateId: 'top-video',
-              width: 640,
-              height: 360,
-              visibleArea: 230_400,
-              currentTime: 0,
-              isPlaying: false,
-            }],
-            childFrames: [],
-          };
-        }
-        return undefined;
-      },
+function fakeApi(): RoomAPI & { minted: unknown[] } {
+  const minted: unknown[] = [];
+  return {
+    minted,
+    createRoom: async (videoUrl, controlMode) => {
+      assert.equal(videoUrl, PAGE);
+      assert.equal(controlMode, 'host-only');
+      return { roomId: 'new-room', hostToken: 'host-token', joinToken: 'jt', joinUrl: 'http://x/join-page/?token=jt' };
     },
-    {
-      async getAllFrames() {
-        return [{ frameId: 0, parentFrameId: -1 }];
-      },
+    mintFreshLink: async (roomId, hostToken) => {
+      minted.push({ roomId, hostToken });
+      return { joinUrl: 'http://x/join-page/?token=fresh', joinToken: 'fresh' };
     },
-  );
-  const handle = createMessageRouter(
-    roomManager as never,
-    tabs,
-    storage,
-    makeFakeLinkMinter(),
-    videos,
-  );
+  };
+}
 
-  const result = await handle({ kind: 'queryVideoCandidates', tabId: 8 }, {});
+function setup(options: { storage?: Record<string, unknown>; selectedFrame?: number | null; url?: string } = {}) {
+  const roomManager = fakeRoomManager();
+  const videos = fakeVideos(options.selectedFrame === undefined ? 0 : options.selectedFrame);
+  const storage = fakeStorage(options.storage);
+  const tabs = fakeTabs(options.url);
+  const api = fakeApi();
+  const router = createMessageRouter({ roomManager, tabs, storage, api, videos });
+  return { router, roomManager, videos, storage, tabs, api };
+}
 
-  assert.equal((result as { hasVideo: boolean }).hasVideo, true);
-});
-
-test('connectRoom wires callbacks that route back to the same tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'connectRoom', roomId: 'room-1', hostToken: 'tok' }, { tab: { id: 7 } });
-
-  assert.equal(roomManager.calls.length, 1);
-  assert.equal(roomManager.calls[0].method, 'connect');
-  const [tabId, roomId, hostToken, callbacks] = roomManager.calls[0].args as [
-    number,
-    string,
-    string,
-    Record<string, (...args: any[]) => void>,
-  ];
-  assert.equal(tabId, 7);
-  assert.equal(roomId, 'room-1');
-  assert.equal(hostToken, 'tok');
-
-  assert.equal(tabs.sent.length, 1);
-  assert.deepEqual(tabs.sent[0], { tabId: 7, message: { kind: 'roomConnected', roomId: 'room-1' } });
-
-  // Exercise the injected callbacks directly — this is exactly how
-  // RoomManager will call them, without needing a real WebSocket here.
-  callbacks.onRemotePlayback({ type: 'pause', currentTime: 1, isPlaying: false });
-  callbacks.onAuthoritativeState({ currentTime: 12, isPlaying: true }, 'join');
-  callbacks.onTimeSync({ currentTime: 13, isPlaying: true }, 99);
-  await callbacks.onPlayerState({
-    revision: 1,
-    source: { pageUrl: 'https://example.com/watch', provider: 'native', mediaKey: 'https://cdn.example/video.mp4' },
-    position: 13,
-    status: 'playing',
-    timestamp: 100,
-  });
-  callbacks.onControlDenied('host-only room');
-  callbacks.onPresence({ connections: [] });
-  callbacks.onSession({ connectionId: 'me', isHost: true, controlMode: 'open' });
-
-  // Authoritative state and session information are delivered both to the
-  // top-frame UI and to the selected player frame.
-  assert.equal(tabs.sent.length, 10);
-  assert.deepEqual(tabs.sent[1], {
-    tabId: 7,
-    message: { kind: 'remotePlaybackEvent', event: { type: 'pause', currentTime: 1, isPlaying: false } },
-  });
-  assert.deepEqual(tabs.sent[2], {
-    tabId: 7,
-    message: {
-      kind: 'authoritativeState',
-      currentTime: 12,
-      isPlaying: true,
-      source: 'join',
-    },
-  });
-  assert.deepEqual(tabs.sent[6], {
-    tabId: 7,
-    message: { kind: 'controlDenied', reason: 'host-only room' },
-  });
-});
-
-test('authoritative source navigation preserves the room and updates the tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  tabs.get = async () => ({ url: 'https://example.com/old' });
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-  await handle({ kind: 'connectRoom', roomId: 'room-source' }, { tab: { id: 17 } });
-  const callbacks = roomManager.calls[0].args[3] as Record<string, (...args: any[]) => Promise<void>>;
-  await callbacks.onPlayerState({
+function state(pageUrl = PAGE): AuthoritativePlayerState {
+  return {
     revision: 2,
-    source: { pageUrl: 'https://example.com/new', provider: 'native', mediaKey: 'https://cdn.example/new.mp4' },
-    position: 0,
-    status: 'paused',
-    timestamp: Date.now(),
-  });
-  assert.deepEqual(tabs.updated, [{ tabId: 17, props: { url: 'https://example.com/new' } }]);
-  assert.deepEqual(storage.stored['activeSession:17'], { roomId: 'room-source', hostToken: undefined });
-});
+    source: { pageUrl, provider: 'native', mediaKey: pageUrl },
+    position: 10,
+    status: 'playing',
+    timestamp: 1,
+  };
+}
 
-test('connectRoom reuses an identical live session instead of closing the host socket', async () => {
-  const roomManager = makeFakeRoomManager({
-    7: { roomId: 'room-live', hostToken: 'host-secret', isHost: true },
-  });
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(
-    roomManager as never,
-    tabs,
-    storage,
-    makeFakeLinkMinter(),
-  );
-
-  await handle(
-    { kind: 'connectRoom', roomId: 'room-live', hostToken: 'host-secret' },
-    { tab: { id: 7 } },
-  );
-
+test('ignores messages with no tab id', async () => {
+  const { router, roomManager } = setup();
+  await router.handleMessage({ kind: 'leaveRoom' }, {});
   assert.equal(roomManager.calls.length, 0);
-  assert.deepEqual(tabs.sent.at(-1), {
-    tabId: 7,
-    message: { kind: 'roomConnected', roomId: 'room-live' },
+});
+
+test('player events count only from the selected frame', async () => {
+  const { router, roomManager } = setup({ selectedFrame: 2 });
+  const event = { action: 'play' as const, source: state().source, position: 1, status: 'playing' as const };
+  await router.handleMessage({ kind: 'localPlayerEvent', event }, { tab: { id: 42, url: PAGE }, frameId: 0 });
+  await router.handleMessage({ kind: 'playerHeartbeat', state: event }, { tab: { id: 42 }, frameId: 0 });
+  assert.equal(roomManager.calls.length, 0);
+  await router.handleMessage({ kind: 'localPlayerEvent', event }, { tab: { id: 42, url: PAGE }, frameId: 2 });
+  await router.handleMessage({ kind: 'playerHeartbeat', state: event }, { tab: { id: 42, url: PAGE }, frameId: 2 });
+  assert.deepEqual(roomManager.calls.map((call) => call.method), ['reportPlayerEvent', 'reportPlayerHeartbeat']);
+  assert.equal(roomManager.calls[0].args[2], PAGE);
+});
+
+test('createRoom creates, remembers and connects the host tab', async () => {
+  const { router, roomManager, storage, videos } = setup();
+  const reply = await router.handleMessage(
+    { kind: 'createRoom', tabId: 5, videoUrl: PAGE, controlMode: 'host-only' },
+    {},
+  );
+  assert.deepEqual(reply, { roomId: 'new-room', joinUrl: 'http://x/join-page/?token=jt' });
+  assert.deepEqual(roomManager.calls[0], { method: 'connect', args: [5, 'new-room', 'host-token'] });
+  assert.deepEqual(storage.stored['activeSession:5'], { roomId: 'new-room', hostToken: 'host-token' });
+  assert.equal((storage.stored['hostSession:5'] as { joinToken: string }).joinToken, 'jt');
+  assert.deepEqual(videos.toTop[0], { kind: 'roomConnected', roomId: 'new-room' });
+});
+
+test('a reloaded page in the same room is brought up to date without reconnecting', async () => {
+  const { router, roomManager, videos } = setup();
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 1 }, {});
+  const callbacks = roomManager.callbacks(1);
+  await callbacks.onSession({ connectionId: 'c', isHost: false, controlMode: 'open' });
+  await callbacks.onPresence({ connections: [{ connId: 'c', isHost: false }, { connId: 'h', isHost: true }] });
+  videos.toTop.length = 0;
+  videos.toSelected.length = 0;
+
+  await router.handleMessage({ kind: 'checkPendingJoin' }, { tab: { id: 1 } });
+  assert.equal(roomManager.calls.filter((call) => call.method === 'connect').length, 1);
+  assert.deepEqual(videos.toTop.map((message) => message.kind), ['roomConnected', 'sessionInfo', 'presenceUpdate']);
+  assert.deepEqual(videos.toSelected.map((message) => message.kind), ['sessionInfo']);
+  assert.ok(roomManager.calls.some((call) => call.method === 'requestState'));
+});
+
+test('a pending join wins over the room the tab was in', async () => {
+  const { router, roomManager, storage } = setup({
+    storage: { 'activeSession:3': { roomId: 'old' }, 'pendingRoomId:3': 'new' },
   });
+  await router.handleMessage({ kind: 'checkPendingJoin' }, { tab: { id: 3 } });
+  assert.deepEqual(roomManager.calls[0], { method: 'connect', args: [3, 'new', undefined] });
+  assert.equal(storage.stored['pendingRoomId:3'], undefined);
+  await router.handleMessage({ kind: 'checkPendingJoin' }, { tab: { id: 4 } });
+  assert.equal(roomManager.calls.length, 1, 'a tab with no room does nothing');
 });
 
-test('joinRequested stores pendingRoomId keyed by tab and navigates the tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle(
-    { kind: 'joinRequested', roomId: 'room-9', videoUrl: 'https://example.com/watch' },
-    { tab: { id: 3 } },
-  );
-
-  assert.deepEqual(storage.stored, { 'pendingRoomId:3': 'room-9' });
-  assert.deepEqual(tabs.updated, [{ tabId: 3, props: { url: 'https://example.com/watch' } }]);
+test('joinRequested leaves the current room and navigates to the video', async () => {
+  const { router, roomManager, storage, tabs } = setup();
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'old', hostToken: 'h', tabId: 2 }, {});
+  await router.handleMessage({ kind: 'joinRequested', roomId: 'new', videoUrl: PAGE }, { tab: { id: 2 } });
+  assert.deepEqual(roomManager.calls.at(-1), { method: 'disconnect', args: [2, true] });
+  assert.equal(storage.stored['activeSession:2'], undefined);
+  assert.equal(storage.stored['hostSession:2'], undefined);
+  assert.equal(storage.stored['pendingRoomId:2'], 'new');
+  assert.deepEqual(tabs.updated, [{ tabId: 2, url: PAGE }]);
 });
 
-test('leaveRoom disconnects the right tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'leaveRoom' }, { tab: { id: 99 } });
-
-  assert.deepEqual(roomManager.calls, [{ method: 'disconnect', args: [99, true] }]);
+test('leaving tells the page the session ended and forgets the tab', async () => {
+  const { router, roomManager, storage, videos } = setup();
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', hostToken: 'h', tabId: 6 }, {});
+  storage.stored['hostSession:6'] = { roomId: 'r' };
+  await router.handleMessage({ kind: 'leaveRoom', tabId: 6 }, {});
+  assert.deepEqual(roomManager.calls.at(-1), { method: 'disconnect', args: [6, true] });
+  assert.deepEqual(storage.stored, {});
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'roomEnded', reason: 'left' });
 });
 
-test('extensionInstalledCheck replies on the same tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'extensionInstalledCheck' }, { tab: { id: 5 } });
-
-  assert.deepEqual(tabs.sent, [{ tabId: 5, message: { kind: 'extensionInstalledResponse' } }]);
+test('a closed room ends the tab session', async () => {
+  const { router, roomManager, storage, videos } = setup();
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 7 }, {});
+  await roomManager.callbacks(7).onRoomClosed('room-gone');
+  assert.equal(storage.stored['activeSession:7'], undefined);
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'roomEnded', reason: 'room-gone' });
 });
 
-test('checkPendingJoin returns the stored roomId and clears it after reading', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  storage.stored['pendingRoomId:11'] = 'room-abc';
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'checkPendingJoin' }, { tab: { id: 11 } });
-
-  assert.deepEqual(tabs.sent, [
-    { tabId: 11, message: { kind: 'roomConnected', roomId: 'room-abc' } },
-    { tabId: 11, message: { kind: 'pendingJoinResult', roomId: null } },
-  ]);
-  assert.equal(storage.stored['pendingRoomId:11'], undefined);
+test('room state goes to the selected player, with a notice after a resync', async () => {
+  const { router, roomManager, videos } = setup();
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 8 }, {});
+  await roomManager.callbacks(8).onPlayerState(state('https://example.com/watch?t=30&v=1'), 'update');
+  assert.deepEqual(videos.toSelected.at(-1), { kind: 'applyPlayerState', state: state('https://example.com/watch?t=30&v=1') });
+  await roomManager.callbacks(8).onPlayerState(state(), 'resync');
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'resynced' });
 });
 
-test('checkPendingJoin preserves an active session during a recoverable disconnect', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  storage.stored['activeSession:13'] = {
-    roomId: 'room-restored',
-    hostToken: 'host-restored',
+test('a tab on another page follows the room once per source', async () => {
+  const { router, roomManager, tabs, videos } = setup({ url: 'https://example.com/other' });
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 9 }, {});
+  const callbacks = roomManager.callbacks(9);
+  await callbacks.onPlayerState(state(), 'update');
+  await callbacks.onPlayerState(state(), 'update');
+  assert.deepEqual(tabs.updated, [{ tabId: 9, url: PAGE }]);
+  assert.equal(videos.toSelected.filter((message) => message.kind === 'applyPlayerState').length, 0);
+  tabs.url = PAGE;
+  await callbacks.onPlayerState(state(), 'update');
+  tabs.url = 'https://example.com/other';
+  await callbacks.onPlayerState(state(), 'update');
+  assert.equal(tabs.updated.length, 2, 'following resumes after arriving');
+});
+
+test('a selection change sends the session and asks for state', async () => {
+  const { router, roomManager, videos } = setup();
+  videos.fireSelection(1, { frameId: 0, candidateId: 'x' });
+  assert.equal(roomManager.calls.length, 0, 'ignored without a session');
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 1 }, {});
+  await roomManager.callbacks(1).onSession({ connectionId: 'c', isHost: true, controlMode: 'open' });
+  videos.toSelected.length = 0;
+  roomManager.calls.length = 0;
+  videos.fireSelection(1, { frameId: 0, candidateId: 'y' });
+  videos.fireSelection(1, null);
+  assert.deepEqual(videos.toSelected.map((message) => message.kind), ['sessionInfo']);
+  assert.deepEqual(roomManager.calls, [{ method: 'requestState', args: [1] }]);
+});
+
+test('restoreSessions reconnects stored tabs and drops closed ones', async () => {
+  const { router, roomManager, storage } = setup({
+    storage: {
+      'activeSession:1': { roomId: 'a', hostToken: 'h' },
+      'activeSession:777': { roomId: 'gone' },
+      'hostSession:777': { roomId: 'gone' },
+      'activeSession:bad': { roomId: 'x' },
+      unrelated: true,
+    },
+  });
+  await router.restoreSessions();
+  assert.deepEqual(roomManager.calls, [{ method: 'connect', args: [1, 'a', 'h'] }]);
+  assert.equal(storage.stored['activeSession:777'], undefined);
+  assert.equal(storage.stored['hostSession:777'], undefined);
+});
+
+test('keepalive reconnects a tab whose session the event page lost', async () => {
+  const { router, roomManager } = setup({ storage: { 'activeSession:4': { roomId: 'r' } } });
+  await router.handleMessage({ kind: 'keepalive' }, { tab: { id: 4 } });
+  await router.handleMessage({ kind: 'keepalive' }, { tab: { id: 4 } });
+  assert.equal(roomManager.calls.filter((call) => call.method === 'connect').length, 1);
+});
+
+test('fresh links are minted for hosts only and update the stored link', async () => {
+  const { router, storage, videos, api } = setup();
+  await router.handleMessage({ kind: 'requestFreshLink' }, { tab: { id: 2 } });
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'freshLinkError', message: 'Only the host can generate a new link' });
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', hostToken: 'h', tabId: 2 }, {});
+  storage.stored['hostSession:2'] = { roomId: 'r', hostToken: 'h', joinToken: 'old', joinUrl: 'old' };
+  await router.handleMessage({ kind: 'requestFreshLink' }, { tab: { id: 2 } });
+  assert.deepEqual(api.minted, [{ roomId: 'r', hostToken: 'h' }]);
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'freshLinkResult', joinUrl: 'http://x/join-page/?token=fresh' });
+  assert.equal((storage.stored['hostSession:2'] as { joinToken: string }).joinToken, 'fresh');
+});
+
+test('a failed mint is reported to the page', async () => {
+  const { router, videos, api } = setup();
+  api.mintFreshLink = async () => {
+    throw new Error('server down');
   };
-  storage.stored['hostSession:13'] = { roomId: 'room-restored' };
-  const handle = createMessageRouter(
-    roomManager as never,
-    tabs,
-    storage,
-    makeFakeLinkMinter(),
-  );
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', hostToken: 'h', tabId: 3 }, {});
+  await router.handleMessage({ kind: 'requestFreshLink' }, { tab: { id: 3 } });
+  assert.deepEqual(videos.toTop.at(-1), { kind: 'freshLinkError', message: 'server down' });
+});
 
-  await handle({ kind: 'checkPendingJoin' }, { tab: { id: 13 } });
+test('video queries, selection and frame status routing', async () => {
+  const { router, videos } = setup({ selectedFrame: 0 });
+  assert.equal(((await router.handleMessage({ kind: 'queryVideoCandidates', tabId: 1 }, {})) as { hasVideo: boolean }).hasVideo, true);
+  assert.equal(((await router.handleMessage({ kind: 'selectVideoCandidate', selection: { frameId: 0, candidateId: 'a' } }, { tab: { id: 1 } })) as { manual: boolean }).manual, true);
+  assert.equal(((await router.handleMessage({ kind: 'clearVideoSelection' }, { tab: { id: 1 } })) as { manual: boolean }).manual, false);
+  await router.handleMessage({ kind: 'frameVideoCandidatesChanged' }, { tab: { id: 1 } });
+  await router.handleMessage({ kind: 'playerAdapterStatus', status: 'error' }, { tab: { id: 1 }, frameId: 3 });
+  await router.handleMessage({ kind: 'playbackApplyFailed' }, { tab: { id: 1 }, frameId: 0 });
+  assert.deepEqual(videos.toTop.map((message) => message.kind), ['playbackApplyFailed']);
+  router.handleNavigation(1, 0);
+  assert.deepEqual(videos.navigations, [[1, 0]]);
+});
 
+test('an unreachable top frame does not break connecting', async () => {
+  const { router, roomManager, videos } = setup();
+  videos.topFails = true;
+  await router.handleMessage({ kind: 'connectRoom', roomId: 'r', tabId: 5 }, {});
   assert.equal(roomManager.calls[0].method, 'connect');
-  assert.deepEqual(roomManager.calls[0].args.slice(0, 3), [
-    13,
-    'room-restored',
-    'host-restored',
-  ]);
-  const callbacks = roomManager.calls[0].args[3] as {
-    onConnectionState(state: 'disconnected'): void;
-  };
-  callbacks.onConnectionState('disconnected');
-  await Promise.resolve();
-  await Promise.resolve();
-
-  assert.deepEqual(storage.stored['activeSession:13'], {
-    roomId: 'room-restored',
-    hostToken: 'host-restored',
-  });
-  assert.deepEqual(storage.stored['hostSession:13'], { roomId: 'room-restored' });
-  assert.deepEqual(tabs.sent.at(-1), {
-    tabId: 13,
-    message: { kind: 'connectionState', state: 'disconnected' },
-  });
-});
-
-test('checkPendingJoin returns null when nothing is pending for this tab', async () => {
-  const roomManager = makeFakeRoomManager();
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, makeFakeLinkMinter());
-
-  await handle({ kind: 'checkPendingJoin' }, { tab: { id: 12 } });
-
-  assert.deepEqual(tabs.sent, [{ tabId: 12, message: { kind: 'pendingJoinResult', roomId: null } }]);
-});
-
-test('requestFreshLink mints via the injected LinkMinter and replies with the result', async () => {
-  const roomManager = makeFakeRoomManager({ 20: { roomId: 'room-20', hostToken: 'host-tok-20', isHost: true } });
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const linkMinter = makeFakeLinkMinter(async (roomId, hostToken) => {
-    assert.equal(roomId, 'room-20');
-    assert.equal(hostToken, 'host-tok-20');
-    return { joinUrl: 'http://x/join-page/?token=abc', joinToken: 'abc' };
-  });
-  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
-
-  await handle({ kind: 'requestFreshLink' }, { tab: { id: 20 } });
-
-  assert.equal(linkMinter.calls.length, 1);
-  assert.deepEqual(tabs.sent, [
-    { tabId: 20, message: { kind: 'freshLinkResult', joinUrl: 'http://x/join-page/?token=abc' } },
-  ]);
-});
-
-test('requestFreshLink replies with freshLinkError when the tab has no host session', async () => {
-  const roomManager = makeFakeRoomManager(); // no session for tab 21 at all
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const linkMinter = makeFakeLinkMinter();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
-
-  await handle({ kind: 'requestFreshLink' }, { tab: { id: 21 } });
-
-  assert.equal(linkMinter.calls.length, 0); // never even attempted
-  assert.deepEqual(tabs.sent, [
-    { tabId: 21, message: { kind: 'freshLinkError', message: 'Only the host can generate a new link' } },
-  ]);
-});
-
-test('requestFreshLink replies with freshLinkError when the tab is a joiner, not the host', async () => {
-  // Present in the room, but hostToken is undefined — a non-host session.
-  const roomManager = makeFakeRoomManager({ 22: { roomId: 'room-22', hostToken: undefined, isHost: false } });
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const linkMinter = makeFakeLinkMinter();
-  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
-
-  await handle({ kind: 'requestFreshLink' }, { tab: { id: 22 } });
-
-  assert.equal(linkMinter.calls.length, 0);
-  assert.deepEqual(tabs.sent, [
-    { tabId: 22, message: { kind: 'freshLinkError', message: 'Only the host can generate a new link' } },
-  ]);
-});
-
-test('requestFreshLink replies with freshLinkError when minting itself fails', async () => {
-  const roomManager = makeFakeRoomManager({ 23: { roomId: 'room-23', hostToken: 'tok', isHost: true } });
-  const tabs = makeFakeTabs();
-  const storage = makeFakeSessionStorage();
-  const linkMinter = makeFakeLinkMinter(async () => {
-    throw new Error('mintFreshLink failed (401)');
-  });
-  const handle = createMessageRouter(roomManager as never, tabs, storage, linkMinter);
-
-  await handle({ kind: 'requestFreshLink' }, { tab: { id: 23 } });
-
-  assert.deepEqual(tabs.sent, [
-    { tabId: 23, message: { kind: 'freshLinkError', message: 'mintFreshLink failed (401)' } },
-  ]);
 });

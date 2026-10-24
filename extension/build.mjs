@@ -13,6 +13,8 @@ const { serverBaseURL, jitsiDomain, landingMatch } = loadBuildConfig();
 async function copyStatic() {
   await mkdir('dist/popup', { recursive: true });
   await mkdir('dist/vendor', { recursive: true });
+  await mkdir('dist/fonts', { recursive: true });
+  await mkdir('dist/icons', { recursive: true });
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
   const landingBridge = manifest.content_scripts.find((entry) =>
     entry.js?.includes('landing-bridge/index.js'),
@@ -27,6 +29,10 @@ async function copyStatic() {
   );
   await cp('src/popup/index.html', 'dist/popup/index.html');
   await cp('src/popup/popup.css', 'dist/popup/popup.css');
+  // Inter stands in for the Mac system font elsewhere (SF Pro cannot be
+  // redistributed); the icon is used by the toolbar, popup and manifest.
+  await cp('vendor/fonts/inter-latin-wght.woff2', 'dist/fonts/inter-latin-wght.woff2');
+  await cp('icons/cowatch.svg', 'dist/icons/cowatch.svg');
   const jitsiSource = await readFile('vendor/jitsi-external-api.js', 'utf8');
   const replacements = [
     ['new Function("return this")()', 'globalThis'],
@@ -47,7 +53,7 @@ async function copyStatic() {
 const buildOptions = {
   entryPoints: {
     'background/index': 'src/background/index.ts',
-    'content/frame-agent': 'src/content/frame-agent.ts',
+    'content/frame-agent': 'src/content/frame-agent-main.ts',
     'content/index': 'src/content/index.ts',
     'popup/index': 'src/popup/index.ts',
     'landing-bridge/index': 'src/landing-bridge/index.ts',

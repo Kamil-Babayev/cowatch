@@ -214,3 +214,25 @@ Three rounds of self-review, jury-style, until no further inconsistencies turned
 > tab, and targets playback messages only to that frame. Overlay, pending-join,
 > and Jitsi behavior remain top-frame-only. This covers cross-origin embedded
 > players without adding site-specific rules.
+
+> **Stabilization note (October 2026):** Real-Firefox testing showed the
+> v1 design needed several corrections, now implemented:
+> - **Video chat:** the call needs a self-hosted Jitsi deployment that allows
+>   anonymous rooms and being framed. Public meet.jit.si limits embedded
+>   meetings to a demo and requires a moderator login. The overlay now
+>   tracks Jitsi's join/error/mute events and times out with a visible retry.
+>   It lives in the browser's top layer, so fullscreen never moves (and
+>   reloads) the call iframe.
+> - **Playback identity:** native players are identified by their page, not
+>   by `currentSrc` (streaming players expose per-browser `blob:` URLs).
+> - **Protocol:** commands are last-writer-wins; host heartbeats never bump the
+>   revision and are dropped when stale; states carry `originConnectionId` so
+>   a sender skips its own echo; `clockPing`/`clockPong` measure clock offset.
+> - **Event-page resilience:** Firefox unloads idle MV3 event pages. The
+>   overlay sends a keepalive every 20 s, and a restarted background
+>   reconnects every tab recorded in `storage.session`.
+> - **Selection:** candidate ids are unique per document; the selected video
+>   is sticky and only yields to a clearly larger one after two seconds.
+>
+> See `server/README.md` for the wire protocol and `epic3report.md` for the
+> full list.

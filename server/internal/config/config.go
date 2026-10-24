@@ -13,6 +13,11 @@ type Config struct {
 	Addr            string
 	JoinBaseURL     string
 	TokenReapPeriod time.Duration
+	// TrustProxy makes rate limiting key on the last X-Forwarded-For hop,
+	// which is the client address as seen by a reverse proxy (Render, nginx).
+	// Leave it off when clients reach the server directly, or the header
+	// could be spoofed to dodge the limit.
+	TrustProxy bool
 }
 
 // Load reads configuration from the environment and applies safe defaults.
@@ -21,6 +26,13 @@ func Load() (Config, error) {
 		Addr:            getEnv("ADDR", ":8080"),
 		JoinBaseURL:     getEnv("JOIN_BASE_URL", "http://localhost:8080"),
 		TokenReapPeriod: time.Minute,
+	}
+	switch strings.ToLower(os.Getenv("TRUST_PROXY")) {
+	case "", "0", "false":
+	case "1", "true":
+		cfg.TrustProxy = true
+	default:
+		return Config{}, fmt.Errorf("TRUST_PROXY must be true or false")
 	}
 
 	parsed, err := url.Parse(cfg.JoinBaseURL)

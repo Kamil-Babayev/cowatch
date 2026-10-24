@@ -1,38 +1,44 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldCorrectDrift, computeJoinSeekTarget } from './sync-math.ts';
+import { driftAction, projectPosition } from './sync-math.ts';
+import type { AuthoritativePlayerState } from './player.ts';
 
-test('shouldCorrectDrift: false for small gaps', () => {
-  assert.equal(shouldCorrectDrift(100, 100.8), false);
+function state(status: AuthoritativePlayerState['status']): AuthoritativePlayerState {
+  return {
+    revision: 1,
+    source: { pageUrl: 'https://a.example/v', provider: 'native', mediaKey: 'https://a.example/v' },
+    position: 10,
+    status,
+    timestamp: 1000,
+  };
+}
+
+test('projectPosition: a playing state keeps moving after it was stamped', () => {
+  assert.equal(projectPosition(state('playing'), 3500), 12.5);
 });
 
-test('shouldCorrectDrift: true past the threshold', () => {
-  assert.equal(shouldCorrectDrift(100, 102), true);
+test('projectPosition: paused and buffering states stay put', () => {
+  assert.equal(projectPosition(state('paused'), 9000), 10);
+  assert.equal(projectPosition(state('buffering'), 9000), 10);
 });
 
-test('shouldCorrectDrift: symmetric regardless of which side is ahead', () => {
-  assert.equal(shouldCorrectDrift(102, 100), true);
+test('projectPosition: never moves backwards for a timestamp in the future', () => {
+  assert.equal(projectPosition(state('playing'), 0), 10);
 });
 
-test('shouldCorrectDrift: exactly at the threshold is not over it', () => {
-  assert.equal(shouldCorrectDrift(100, 101.5, 1.5), false);
+test('driftAction: ignores tiny drift and is symmetric', () => {
+  assert.equal(driftAction(0.1, true, true), 'none');
+  assert.equal(driftAction(-0.1, true, true), 'none');
 });
 
-test('computeJoinSeekTarget: paused state — no time added regardless of elapsed', () => {
-  const result = computeJoinSeekTarget(50, false, Date.now() - 10_000, Date.now());
-  assert.equal(result, 50);
+test('driftAction: nudges moderate drift while playing, seeks otherwise', () => {
+  assert.equal(driftAction(0.8, true, true), 'nudge');
+  assert.equal(driftAction(-0.8, true, true), 'nudge');
+  assert.equal(driftAction(0.8, false, true), 'seek');
+  assert.equal(driftAction(0.8, true, false), 'seek');
 });
 
-test('computeJoinSeekTarget: playing state — adds elapsed wall-clock time', () => {
-  const stateTimestamp = 1_000_000;
-  const now = 1_003_000; // 3 seconds later
-  const result = computeJoinSeekTarget(50, true, stateTimestamp, now);
-  assert.equal(result, 53);
-});
-
-test('computeJoinSeekTarget: never returns a value before the recorded time (no negative elapsed)', () => {
-  // A stale/out-of-order timestamp shouldn't cause a seek backwards past
-  // the recorded position.
-  const result = computeJoinSeekTarget(50, true, /* stateTimestamp */ 2_000, /* now */ 1_000);
-  assert.equal(result, 50);
+test('driftAction: seeks large drift', () => {
+  assert.equal(driftAction(1.5, true, true), 'seek');
+  assert.equal(driftAction(-40, true, true), 'seek');
 });

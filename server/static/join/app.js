@@ -68,7 +68,9 @@
         showState('state-error');
         return;
       }
-      var hasExtension = await detectExtension(1000);
+      // The bridge content script can load a little after the page on a slow
+      // machine; give it a few seconds before suggesting installation.
+      var hasExtension = await detectExtension(3000);
       if (!hasExtension) {
         showState('state-no-extension');
         return;

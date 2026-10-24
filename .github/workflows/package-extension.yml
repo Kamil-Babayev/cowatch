@@ -10,8 +10,10 @@ permissions:
 
 env:
   SERVER_BASE_URL: https://cowatch-2uvm.onrender.com
-  JITSI_DOMAIN: meet.jit.si
-  COWATCH_DEBUG: "1"
+  # Set the repository variable JITSI_DOMAIN to your self-hosted Jitsi
+  # (Settings → Secrets and variables → Actions → Variables). meet.jit.si
+  # only works as a short demo when embedded.
+  JITSI_DOMAIN: ${{ vars.JITSI_DOMAIN || 'meet.jit.si' }}
 
 jobs:
   release:
@@ -53,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           release_title="CoWatch ${GITHUB_REF_NAME}"
-          release_notes="Unsigned Firefox Phase 1 diagnostic build for ${SERVER_BASE_URL}. Debug frame and obrut handshake logs are enabled. Load the ZIP temporarily from about:debugging#/runtime/this-firefox; Firefox removes it after restart."
+          release_notes="Unsigned Firefox build for ${SERVER_BASE_URL} with video chat on ${JITSI_DOMAIN}. Load the ZIP temporarily from about:debugging#/runtime/this-firefox; Firefox removes it after restart. Everyone in a room needs this version: it is not compatible with servers or extensions older than v0.2.0."
 
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release edit "${GITHUB_REF_NAME}" \

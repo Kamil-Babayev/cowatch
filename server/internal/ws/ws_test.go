@@ -66,39 +66,83 @@ func readType(t *testing.T, conn *websocket.Conn, wanted string) Message {
 	}
 }
 
-func TestConnectSessionPresenceRelayAndState(t *testing.T) {
+func decode[T any](t *testing.T, msg Message) T {
+	t.Helper()
+	var value T
+	if err := json.Unmarshal(msg.Payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+var nativeSource = MediaSourcePayload{
+	PageURL:  "https://video.example/watch",
+	Provider: "native",
+	MediaKey: "https://video.example/watch#1420",
+}
+
+func sendCommand(t *testing.T, conn *websocket.Conn, id, action string, source MediaSourcePayload, position float64) {
+	t.Helper()
+	payload, _ := json.Marshal(PlayerCommandPayload{CommandID: id, Action: action, Source: source, Position: position})
+	if err := conn.WriteJSON(Message{Type: MsgPlayerCommand, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sendHeartbeat(t *testing.T, conn *websocket.Conn, base uint64, position float64, status string) {
+	t.Helper()
+	payload, _ := json.Marshal(PlayerHeartbeatPayload{BaseRevision: base, Source: nativeSource, Position: position, Status: status})
+	if err := conn.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requestState(t *testing.T, conn *websocket.Conn) StateResponsePayload {
+	t.Helper()
+	if err := conn.WriteJSON(Message{Type: MsgStateRequest}); err != nil {
+		t.Fatal(err)
+	}
+	return decode[StateResponsePayload](t, readType(t, conn, MsgStateResponse))
+}
+
+func TestConnectSessionPresenceAndState(t *testing.T) {
 	server, room, _ := websocketServer(t, store.ControlModeOpen)
 	host := dialRoom(t, server, room.ID, room.HostToken)
-	session := readType(t, host, MsgSession)
-	var sessionPayload SessionPayload
-	_ = json.Unmarshal(session.Payload, &sessionPayload)
-	if !sessionPayload.IsHost || sessionPayload.ControlMode != store.ControlModeOpen {
-		t.Fatalf("session %+v", sessionPayload)
+	session := decode[SessionPayload](t, readType(t, host, MsgSession))
+	if !session.IsHost || session.ControlMode != store.ControlModeOpen || session.ConnectionID == "" {
+		t.Fatalf("session %+v", session)
 	}
 	guest := dialRoom(t, server, room.ID, "")
 	readType(t, guest, MsgSession)
-	var presencePayload PresencePayload
-	for len(presencePayload.Connections) != 2 {
-		presence := readType(t, host, MsgPresence)
-		_ = json.Unmarshal(presence.Payload, &presencePayload)
+	var presence PresencePayload
+	for len(presence.Connections) != 2 {
+		presence = decode[PresencePayload](t, readType(t, host, MsgPresence))
 	}
 
-	payload, _ := json.Marshal(PlaybackPayload{CurrentTime: 12, IsPlaying: true})
-	if err := host.WriteJSON(Message{Type: MsgPlay, Payload: payload}); err != nil {
+	sendCommand(t, host, "c1", "play", nativeSource, 12)
+	if relayed := readType(t, guest, MsgPlayerState); relayed.Timestamp == 0 {
+		t.Fatal("state was not server stamped")
+	}
+	state := requestState(t, guest)
+	if state.Position != 12 || state.Status != "playing" || state.Revision != 1 || state.Source != nativeSource {
+		t.Fatalf("state %+v", state)
+	}
+}
+
+func TestClockPingIsAnsweredWithServerTime(t *testing.T) {
+	server, room, _ := websocketServer(t, store.ControlModeOpen)
+	conn := dialRoom(t, server, room.ID, "")
+	readType(t, conn, MsgSession)
+	if err := conn.WriteJSON(Message{Type: MsgClockPing, Payload: json.RawMessage(`{"t0":"bad"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	relayed := readType(t, guest, MsgPlay)
-	if relayed.Timestamp == 0 {
-		t.Fatal("relay was not server stamped")
-	}
-	if err := guest.WriteJSON(Message{Type: MsgStateRequest}); err != nil {
+	payload, _ := json.Marshal(ClockPingPayload{T0: 1234.5})
+	if err := conn.WriteJSON(Message{Type: MsgClockPing, Payload: payload}); err != nil {
 		t.Fatal(err)
 	}
-	state := readType(t, guest, MsgStateResponse)
-	var statePayload StateResponsePayload
-	_ = json.Unmarshal(state.Payload, &statePayload)
-	if statePayload.CurrentTime != 12 || !statePayload.IsPlaying {
-		t.Fatalf("state %+v", statePayload)
+	pong := decode[ClockPongPayload](t, readType(t, conn, MsgClockPong))
+	if pong.T0 != 1234.5 || pong.ServerTime == 0 {
+		t.Fatalf("pong %+v", pong)
 	}
 }
 
@@ -109,25 +153,16 @@ func TestHostOnlyDenialAndHostDeparture(t *testing.T) {
 	guest := dialRoom(t, server, room.ID, "")
 	readType(t, guest, MsgSession)
 
-	payload, _ := json.Marshal(PlaybackPayload{CurrentTime: 10, IsPlaying: false})
-	if err := guest.WriteJSON(Message{Type: MsgPause, Payload: payload}); err != nil {
-		t.Fatal(err)
-	}
-	denied := readType(t, guest, MsgControlDenied)
-	var deniedPayload ControlDeniedPayload
-	_ = json.Unmarshal(denied.Payload, &deniedPayload)
-	if deniedPayload.Reason == "" {
+	sendCommand(t, guest, "denied", "pause", nativeSource, 10)
+	if denied := decode[ControlDeniedPayload](t, readType(t, guest, MsgControlDenied)); denied.Reason == "" {
 		t.Fatal("missing denial reason")
 	}
 
 	if err := host.WriteJSON(Message{Type: MsgLeaveRoom}); err != nil {
 		t.Fatal(err)
 	}
-	closed := readType(t, guest, MsgRoomClosed)
-	var closePayload RoomClosedPayload
-	_ = json.Unmarshal(closed.Payload, &closePayload)
-	if closePayload.Reason != "host-left" {
-		t.Fatalf("close %+v", closePayload)
+	if closed := decode[RoomClosedPayload](t, readType(t, guest, MsgRoomClosed)); closed.Reason != "host-left" {
+		t.Fatalf("close %+v", closed)
 	}
 }
 
@@ -146,114 +181,96 @@ func TestHostReconnectGraceAndExpiry(t *testing.T) {
 		t.Fatalf("reconnected host was closed during grace: %v", err)
 	}
 	_ = reconnected.Close()
-	closed := readType(t, guest, MsgRoomClosed)
-	var payload RoomClosedPayload
-	_ = json.Unmarshal(closed.Payload, &payload)
-	if payload.Reason != "host-left" {
-		t.Fatalf("close payload %+v", payload)
+	if closed := decode[RoomClosedPayload](t, readType(t, guest, MsgRoomClosed)); closed.Reason != "host-left" {
+		t.Fatalf("close payload %+v", closed)
 	}
 }
 
-func TestRevisionedPlayerStateAndStaleCommand(t *testing.T) {
+func TestCommandsAreLastWriterWinsAndCarryOrigin(t *testing.T) {
 	server, room, _ := websocketServer(t, store.ControlModeOpen)
 	host := dialRoom(t, server, room.ID, room.HostToken)
-	readType(t, host, MsgSession)
+	hostSession := decode[SessionPayload](t, readType(t, host, MsgSession))
 	guest := dialRoom(t, server, room.ID, "")
-	readType(t, guest, MsgSession)
+	guestSession := decode[SessionPayload](t, readType(t, guest, MsgSession))
 
-	source := MediaSourcePayload{
-		PageURL:  "https://video.example/watch",
-		Provider: "obrut",
-		MediaKey: "https://abc.obrut.show/embed/1",
+	obrut := MediaSourcePayload{PageURL: "https://video.example/watch", Provider: "obrut", MediaKey: "https://abc.obrut.show/embed/1"}
+	sendCommand(t, host, "command-1", "play", obrut, 12)
+	accepted := decode[PlayerStatePayload](t, readType(t, guest, MsgPlayerState))
+	if accepted.Revision != 1 || accepted.Status != "playing" || accepted.Position != 12 ||
+		accepted.CommandID != "command-1" || accepted.OriginConnectionID != hostSession.ConnectionID {
+		t.Fatalf("state %+v", accepted)
 	}
-	command, _ := json.Marshal(PlayerCommandPayload{
-		CommandID: "command-1", BaseRevision: 0, Action: "play", Source: source, Position: 12,
-	})
-	if err := host.WriteJSON(Message{Type: MsgPlayerCommand, Payload: command}); err != nil {
-		t.Fatal(err)
-	}
-	accepted := readType(t, guest, MsgPlayerState)
-	var state PlayerStatePayload
-	_ = json.Unmarshal(accepted.Payload, &state)
-	if state.Revision != 1 || state.Status != "playing" || state.Position != 12 || state.CommandID != "command-1" {
-		t.Fatalf("state %+v", state)
+	if echo := decode[PlayerStatePayload](t, readType(t, host, MsgPlayerState)); echo.OriginConnectionID != hostSession.ConnectionID {
+		t.Fatalf("originator echo %+v", echo)
 	}
 
-	stale, _ := json.Marshal(PlayerCommandPayload{
-		CommandID: "stale", BaseRevision: 0, Action: "pause", Source: source, Position: 13,
-	})
-	if err := guest.WriteJSON(Message{Type: MsgPlayerCommand, Payload: stale}); err != nil {
-		t.Fatal(err)
-	}
-	response := readType(t, guest, MsgStateResponse)
-	var snapshot StateResponsePayload
-	_ = json.Unmarshal(response.Payload, &snapshot)
-	if snapshot.Revision != 1 || snapshot.Status != "playing" || snapshot.Source == nil {
-		t.Fatalf("snapshot %+v", snapshot)
+	// A guest that has not seen revision 1 yet still wins: commands never revert.
+	sendCommand(t, guest, "command-2", "pause", obrut, 13)
+	paused := decode[PlayerStatePayload](t, readType(t, host, MsgPlayerState))
+	if paused.Revision != 2 || paused.Status != "paused" || paused.OriginConnectionID != guestSession.ConnectionID {
+		t.Fatalf("paused %+v", paused)
 	}
 
 	late := dialRoom(t, server, room.ID, "")
 	readType(t, late, MsgSession)
-	if err := late.WriteJSON(Message{Type: MsgStateRequest}); err != nil {
-		t.Fatal(err)
-	}
-	lateState := readType(t, late, MsgStateResponse)
-	_ = json.Unmarshal(lateState.Payload, &snapshot)
-	if snapshot.Revision != 1 || snapshot.Source.MediaKey != source.MediaKey {
+	if snapshot := requestState(t, late); snapshot.Revision != 2 || snapshot.Source.MediaKey != obrut.MediaKey {
 		t.Fatalf("late snapshot %+v", snapshot)
 	}
 }
 
-func TestPlayerHeartbeatAuthorityAndStaleRevision(t *testing.T) {
+func TestHeartbeatsKeepRevisionSkipSenderAndDropStale(t *testing.T) {
 	server, room, _ := websocketServer(t, store.ControlModeOpen)
 	host := dialRoom(t, server, room.ID, room.HostToken)
 	readType(t, host, MsgSession)
 	guest := dialRoom(t, server, room.ID, "")
 	readType(t, guest, MsgSession)
 
-	source := MediaSourcePayload{
-		PageURL:  "https://video.example/watch",
-		Provider: "native",
-		MediaKey: "https://cdn.example/video.mp4",
+	sendHeartbeat(t, guest, 0, 99, "playing") // ignored: guests have no heartbeat authority
+	sendHeartbeat(t, host, 0, 24, "buffering")
+	first := decode[PlayerStatePayload](t, readType(t, guest, MsgPlayerState))
+	if first.Revision != 1 || first.Status != "buffering" || first.Position != 24 || first.Source != nativeSource {
+		t.Fatalf("heartbeat state %+v", first)
 	}
-	guestHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
-		BaseRevision: 0, Source: source, Position: 99, Status: "playing",
-	})
-	if err := guest.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: guestHeartbeat}); err != nil {
-		t.Fatal(err)
-	}
-	if err := guest.WriteJSON(Message{Type: MsgStateRequest}); err != nil {
-		t.Fatal(err)
+	sendHeartbeat(t, host, 1, 30, "playing")
+	if second := decode[PlayerStatePayload](t, readType(t, guest, MsgPlayerState)); second.Revision != 1 || second.Position != 30 {
+		t.Fatalf("refresh %+v", second)
 	}
 
-	hostHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
-		BaseRevision: 0, Source: source, Position: 24, Status: "buffering",
-	})
-	if err := host.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: hostHeartbeat}); err != nil {
-		t.Fatal(err)
+	sendCommand(t, guest, "pause", "pause", nativeSource, 31)
+	// The host's next message is the guest's command: its own heartbeats
+	// were never echoed back to it.
+	if next := decode[PlayerStatePayload](t, readType(t, host, MsgPlayerState)); next.CommandID != "pause" {
+		t.Fatalf("host received %+v", next)
 	}
-	accepted := readType(t, guest, MsgPlayerState)
-	var state PlayerStatePayload
-	if err := json.Unmarshal(accepted.Payload, &state); err != nil {
-		t.Fatal(err)
-	}
-	if state.Revision != 1 || state.Status != "buffering" || state.Position != 24 || state.Source != source {
-		t.Fatalf("heartbeat state %+v", state)
-	}
+	sendHeartbeat(t, host, 1, 32, "playing") // stale: must not undo the guest's pause
 
-	staleHeartbeat, _ := json.Marshal(PlayerHeartbeatPayload{
-		BaseRevision: 0, Source: source, Position: 30, Status: "playing",
-	})
-	if err := host.WriteJSON(Message{Type: MsgPlayerHeartbeat, Payload: staleHeartbeat}); err != nil {
-		t.Fatal(err)
+	if snapshot := requestState(t, host); snapshot.Revision != 2 || snapshot.Status != "paused" || snapshot.Position != 31 {
+		t.Fatalf("stale heartbeat applied: %+v", snapshot)
 	}
-	response := readType(t, host, MsgStateResponse)
-	var snapshot StateResponsePayload
-	if err := json.Unmarshal(response.Payload, &snapshot); err != nil {
-		t.Fatal(err)
+}
+
+func TestMediaSourceValidation(t *testing.T) {
+	cases := map[string]struct {
+		source MediaSourcePayload
+		want   bool
+	}{
+		"native opaque key":   {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "native", MediaKey: "https://a.example/v#90"}, true},
+		"native non-url key":  {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "native", MediaKey: "page-key"}, true},
+		"empty key":           {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "native"}, false},
+		"oversized key":       {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "native", MediaKey: strings.Repeat("k", maxMediaKeyLength+1)}, false},
+		"non-http page":       {MediaSourcePayload{PageURL: "file:///v", Provider: "native", MediaKey: "k"}, false},
+		"obrut host":          {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "obrut", MediaKey: "https://x.obrut.show/e/1"}, true},
+		"obrut wrong host":    {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "obrut", MediaKey: "https://evil.example/e/1"}, false},
+		"obrut non-http":      {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "obrut", MediaKey: "blob:x"}, false},
+		"unknown provider":    {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "other", MediaKey: "k"}, false},
+		"unparseable page":    {MediaSourcePayload{PageURL: "://bad", Provider: "native", MediaKey: "k"}, false},
+		"obrut unparseable":   {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "obrut", MediaKey: "://bad"}, false},
+		"native http mp4 key": {MediaSourcePayload{PageURL: "https://a.example/v", Provider: "native", MediaKey: "https://cdn.example/v.mp4"}, true},
 	}
-	if snapshot.Revision != 1 || snapshot.Status != "buffering" || snapshot.Position != 24 {
-		t.Fatalf("stale heartbeat response %+v", snapshot)
+	for name, tc := range cases {
+		if got := validMediaSource(tc.source); got != tc.want {
+			t.Errorf("%s: got %v want %v", name, got, tc.want)
+		}
 	}
 }
 
@@ -263,18 +280,11 @@ func TestSourceReplacementIsAlwaysHostOnly(t *testing.T) {
 	readType(t, host, MsgSession)
 	guest := dialRoom(t, server, room.ID, "")
 	readType(t, guest, MsgSession)
-	source := MediaSourcePayload{PageURL: "https://video.example/2", Provider: "native", MediaKey: "https://cdn.example/2.mp4"}
-	payload, _ := json.Marshal(PlayerCommandPayload{CommandID: "replace-1", Action: "replace", Source: source})
-	if err := guest.WriteJSON(Message{Type: MsgPlayerCommand, Payload: payload}); err != nil {
-		t.Fatal(err)
-	}
+	source := MediaSourcePayload{PageURL: "https://video.example/2", Provider: "native", MediaKey: "https://video.example/2#60"}
+	sendCommand(t, guest, "replace-1", "replace", source, 0)
 	readType(t, guest, MsgControlDenied)
-	if err := host.WriteJSON(Message{Type: MsgPlayerCommand, Payload: payload}); err != nil {
-		t.Fatal(err)
-	}
-	state := readType(t, guest, MsgPlayerState)
-	var accepted PlayerStatePayload
-	_ = json.Unmarshal(state.Payload, &accepted)
+	sendCommand(t, host, "replace-1", "replace", source, 0)
+	accepted := decode[PlayerStatePayload](t, readType(t, guest, MsgPlayerState))
 	if accepted.Source.PageURL != source.PageURL || accepted.Status != "paused" {
 		t.Fatalf("accepted %+v", accepted)
 	}
@@ -284,14 +294,19 @@ func TestInvalidPayloadAndUnknownRoom(t *testing.T) {
 	server, room, _ := websocketServer(t, store.ControlModeOpen)
 	conn := dialRoom(t, server, room.ID, room.HostToken)
 	readType(t, conn, MsgSession)
-	bad, _ := json.Marshal(PlaybackPayload{CurrentTime: -1, IsPlaying: true})
-	if err := conn.WriteJSON(Message{Type: MsgPlay, Payload: bad}); err != nil {
-		t.Fatal(err)
-	}
+	sendCommand(t, conn, "bad", "play", nativeSource, -1)
+	sendCommand(t, conn, "odd", "rewind", nativeSource, 1)
 	if err := conn.WriteJSON(Message{Type: "unknown"}); err != nil {
 		t.Fatal(err)
 	}
+	sendCommand(t, conn, "good", "seek", nativeSource, 5)
+	if snapshot := requestState(t, conn); snapshot.Revision != 1 || snapshot.Position != 5 {
+		t.Fatalf("an invalid command was stored: %+v", snapshot)
+	}
+}
 
+func TestUnknownRoomIsNotFound(t *testing.T) {
+	server, _, _ := websocketServer(t, store.ControlModeOpen)
 	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/rooms/missing/connect"
 	_, response, err := websocket.DefaultDialer.Dial(url, nil)
 	if err == nil || response == nil || response.StatusCode != http.StatusNotFound {
@@ -304,10 +319,7 @@ func TestCloseAll(t *testing.T) {
 	conn := dialRoom(t, server, room.ID, room.HostToken)
 	readType(t, conn, MsgSession)
 	hub.CloseAll("server-shutdown")
-	msg := readType(t, conn, MsgRoomClosed)
-	var payload RoomClosedPayload
-	_ = json.Unmarshal(msg.Payload, &payload)
-	if payload.Reason != "server-shutdown" {
+	if payload := decode[RoomClosedPayload](t, readType(t, conn, MsgRoomClosed)); payload.Reason != "server-shutdown" {
 		t.Fatalf("payload %+v", payload)
 	}
 }

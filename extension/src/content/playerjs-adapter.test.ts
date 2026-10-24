@@ -113,3 +113,91 @@ test('PlayerJS keeps only the newest state while the handshake is pending', asyn
   }));
   adapter.dispose();
 });
+
+const fast = { queryTimeoutMs: 20, probeAttempts: 4, probeRetryMs: 20 };
+
+test('PlayerJS probe retries until a slow player answers', async () => {
+  const adapter = new PlayerJSAdapter('obrut-4', iframe, fast);
+  const commands: Array<{ message: unknown; origin: string }> = [];
+  setTimeout(() => installResponder({ id: 'player', time: 3, playing: true }, commands), 30);
+  await adapter.probe(new AbortController().signal);
+  assert.equal((await adapter.getState()).status, 'playing');
+  adapter.dispose();
+});
+
+test('PlayerJS probe gives up after its attempts and honours abort', async () => {
+  const adapter = new PlayerJSAdapter('obrut-5', iframe, fast);
+  await assert.rejects(adapter.probe(new AbortController().signal), /did not respond/);
+  const controller = new AbortController();
+  const pending = adapter.probe(controller.signal);
+  controller.abort();
+  await assert.rejects(pending, (error: Error) => error.name === 'AbortError');
+  adapter.dispose();
+  await assert.rejects(adapter.probe(new AbortController().signal), (error: Error) => error.name === 'AbortError');
+});
+
+test('PlayerJS buffering resumes the previous state and host buffering holds joiners', async () => {
+  const commands: Array<{ message: unknown; origin: string }> = [];
+  installResponder({ id: 'player', time: 10, playing: false }, commands);
+  const adapter = new PlayerJSAdapter('obrut-6', iframe, fast);
+  await adapter.probe(new AbortController().signal);
+  const events: Array<{ action: string; status: string }> = [];
+  adapter.subscribe((event) => events.push({ action: event.action, status: event.status }));
+  const send = (data: unknown) => window.dispatchEvent(new dom.window.MessageEvent('message', {
+    source: iframe.contentWindow,
+    origin: 'https://cdn2.obrut.show',
+    data,
+  }));
+  send({ event: 'buffering' });
+  send({ event: 'buffered' });
+  send(JSON.stringify({ event: 'new' }));
+  send({ event: 'finish' });
+  send({ event: 'duration', data: 99 });
+  send({ event: 'time', data: 12 });
+  send({ event: 'unknown' });
+  send('not json');
+  assert.deepEqual(events, [
+    { action: 'buffering', status: 'buffering' },
+    { action: 'status', status: 'paused' },
+    { action: 'replace', status: 'loading' },
+    { action: 'ended', status: 'ended' },
+  ]);
+  const before = commands.length;
+  await adapter.apply({
+    revision: 1,
+    source: (await adapter.getState()).source,
+    position: 50,
+    status: 'buffering',
+    timestamp: Date.now(),
+  });
+  assert.equal(commands.length, before + 2, 'only the getState queries, no commands');
+  assert.ok(commands.slice(-2).every((item) => item.origin === 'https://cdn2.obrut.show'), 'follows the answering origin');
+  adapter.dispose();
+});
+
+test('PlayerJS switches source itself and recognises its own navigation', async () => {
+  const commands: Array<{ message: unknown; origin: string }> = [];
+  installResponder({ id: 'player', time: 0, playing: false }, commands);
+  const adapter = new PlayerJSAdapter('obrut-7', iframe, fast);
+  await adapter.probe(new AbortController().signal);
+  await adapter.apply({
+    revision: 1,
+    source: { pageUrl: 'https://watch.example/movie', provider: 'obrut', mediaKey: 'https://abc.obrut.show/embed/two' },
+    position: 30,
+    status: 'paused',
+    timestamp: Date.now(),
+  });
+  assert.equal(iframe.src, 'https://abc.obrut.show/embed/two');
+  assert.equal(adapter.expectsSource('https://abc.obrut.show/embed/two'), true);
+  assert.equal(adapter.expectsSource('https://abc.obrut.show/embed/three'), false);
+  installResponder({ id: 'player', time: 0, playing: false }, commands);
+  iframe.dispatchEvent(new dom.window.Event('load'));
+  for (let i = 0; i < 20 && !commands.some((item) => (item.message as { api: string }).api === 'seek'); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(commands.some((item) => {
+    const value = item.message as { api: string; set?: unknown };
+    return value.api === 'seek' && Number(value.set) === 30;
+  }), 'the queued state is applied once the new player answers');
+  adapter.dispose();
+});

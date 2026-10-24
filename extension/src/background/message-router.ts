@@ -1,8 +1,9 @@
-import type { RoomManager } from './room-manager.ts';
-import type { ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
+import type { RoomManager, RoomManagerCallbacks } from './room-manager.ts';
+import type { RoomEndReason, ToBackgroundMessage, ToContentMessage } from '../shared/runtime-messages.ts';
 import type { VideoCoordinator } from './video-coordinator.ts';
-import type { VideoSelection, VideoTabStatus } from '../shared/video-frames.ts';
-import type { SessionPayload } from '../shared/messages.ts';
+import type { PresencePayload, SessionPayload } from '../shared/messages.ts';
+import type { ControlMode, CreateRoomResult } from '../shared/api-client.ts';
+import { pageKey, samePage } from '../shared/page-key.ts';
 
 /**
  * Minimal surface of `browser.tabs` this router actually needs — injected
@@ -11,11 +12,6 @@ import type { SessionPayload } from '../shared/messages.ts';
  * the real `browser` global.
  */
 export interface TabsAPI {
-  sendMessage(
-    tabId: number,
-    message: ToContentMessage,
-    options?: { frameId?: number },
-  ): unknown | Promise<unknown>;
   update(tabId: number, updateProps: { url: string }): void | Promise<unknown>;
   get(tabId: number): Promise<{ url?: string }>;
 }
@@ -24,211 +20,254 @@ export interface TabsAPI {
 export interface SessionStorageAPI {
   set(items: Record<string, unknown>): void | Promise<void>;
   get(keys: string[]): Record<string, unknown> | Promise<Record<string, unknown>>;
+  getAll(): Record<string, unknown> | Promise<Record<string, unknown>>;
   remove(keys: string[]): void | Promise<void>;
 }
 
-/**
- * Minimal surface of shared/api-client.ts's mintFreshLink this router
- * needs — injected for the same reason as TabsAPI/SessionStorageAPI:
- * testable with a fake in Node, real fetch only ever wired in
- * background/index.ts.
- */
-export interface LinkMinter {
+/** The parts of shared/api-client.ts this router needs, injected for tests. */
+export interface RoomAPI {
+  createRoom(videoUrl: string, controlMode: ControlMode): Promise<CreateRoomResult>;
   mintFreshLink(roomId: string, hostToken: string): Promise<{ joinUrl: string; joinToken: string }>;
 }
 
 export interface MessageSender {
   tab?: { id?: number; url?: string };
   frameId?: number;
-  documentId?: string;
 }
 
-type VideoRouting = Pick<
+export type RoomControl = Pick<
+  RoomManager,
+  'connect' | 'disconnect' | 'getSession' | 'requestState' | 'reportPlayerEvent' | 'reportPlayerHeartbeat'
+>;
+
+export type VideoRouting = Pick<
   VideoCoordinator,
   | 'discover'
   | 'select'
   | 'clearManualSelection'
-  | 'noteDocument'
   | 'isSelected'
   | 'sendToSelected'
   | 'sendToTop'
   | 'clear'
+  | 'onSelectionChanged'
+  | 'handleNavigation'
 >;
 
-export function createMessageRouter(
-  roomManager: RoomManager,
-  tabs: TabsAPI,
-  sessionStorage: SessionStorageAPI,
-  linkMinter: LinkMinter,
-  videos?: VideoRouting,
-) {
-  const emptyStatus: VideoTabStatus = {
-    hasVideo: false,
-    candidates: [],
-    selected: null,
-  };
-  const videoRouting: VideoRouting = videos ?? {
-    discover: async () => ({ status: emptyStatus, selectionChanged: false }),
-    select: async (_tabId: number, selection: VideoSelection) => ({
-      ...emptyStatus,
-      selected: selection,
-    }),
-    clearManualSelection: async () => ({ status: emptyStatus, selectionChanged: false }),
-    noteDocument: () => undefined,
-    isSelected: () => true,
-    sendToSelected: async (tabId, message) => {
-      await tabs.sendMessage(tabId, message);
-      return true;
-    },
-    sendToTop: async (tabId, message) => {
-      await tabs.sendMessage(tabId, message);
-    },
-    clear: () => undefined,
-  };
+export interface RouterDeps {
+  roomManager: RoomControl;
+  tabs: TabsAPI;
+  storage: SessionStorageAPI;
+  api: RoomAPI;
+  videos: VideoRouting;
+}
+
+interface ActiveSession {
+  roomId: string;
+  hostToken?: string;
+}
+
+/** What the popup shows for a room this tab hosts. */
+export interface HostSession {
+  roomId: string;
+  hostToken: string;
+  joinToken: string;
+  joinUrl: string;
+}
+
+export function activeSessionKey(tabId: number): string {
+  return `activeSession:${tabId}`;
+}
+
+export function hostSessionKey(tabId: number): string {
+  return `hostSession:${tabId}`;
+}
+
+function pendingRoomKey(tabId: number): string {
+  return `pendingRoomId:${tabId}`;
+}
+
+export function createMessageRouter({ roomManager, tabs, storage, api, videos }: RouterDeps) {
   const sessionPayloads = new Map<number, SessionPayload>();
-  function activeSessionKey(tabId: number): string {
-    return `activeSession:${tabId}`;
-  }
+  const presence = new Map<number, PresencePayload>();
+  // The page each tab was last sent to while following the room, so a
+  // redirect that never lands on the exact URL cannot reload forever.
+  const followed = new Map<number, string>();
 
-  function hostSessionKey(tabId: number): string {
-    return `hostSession:${tabId}`;
-  }
-
-  async function clearSessionIfCurrent(tabId: number, roomId: string): Promise<void> {
-    const activeKey = activeSessionKey(tabId);
-    const result = await sessionStorage.get([activeKey]);
-    const active = result[activeKey] as { roomId?: string } | undefined;
-    if (active?.roomId === roomId) {
-      await sessionStorage.remove([activeKey, hostSessionKey(tabId)]);
+  /** The top frame may have no listener yet (page still loading). */
+  async function toTop(tabId: number, message: ToContentMessage): Promise<void> {
+    try {
+      await videos.sendToTop(tabId, message);
+    } catch {
+      // It asks again with checkPendingJoin once its content script runs.
     }
+  }
+
+  // Whatever changed the selection (discovery, the user, a navigation, a
+  // frame disappearing), the newly selected frame needs to know whether it
+  // is the host — so it heartbeats — and the room's current state.
+  videos.onSelectionChanged((tabId, selection) => {
+    if (!selection || !roomManager.getSession(tabId)) return;
+    const payload = sessionPayloads.get(tabId);
+    if (payload) void videos.sendToSelected(tabId, { kind: 'sessionInfo', payload });
+    roomManager.requestState(tabId);
+  });
+
+  function forget(tabId: number): void {
+    sessionPayloads.delete(tabId);
+    presence.delete(tabId);
+    followed.delete(tabId);
+    videos.clear(tabId);
+  }
+
+  async function endTab(tabId: number, reason: RoomEndReason): Promise<void> {
+    forget(tabId);
+    await storage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);
+    await toTop(tabId, { kind: 'roomEnded', reason });
+  }
+
+  function callbacksFor(tabId: number): RoomManagerCallbacks {
+    return {
+      onPlayerState: async (state, cause) => {
+        const tab = await tabs.get(tabId).catch(() => null);
+        if (tab?.url && !samePage(tab.url, state.source.pageUrl)) {
+          const target = pageKey(state.source.pageUrl);
+          if (followed.get(tabId) !== target) {
+            followed.set(tabId, target);
+            await tabs.update(tabId, { url: state.source.pageUrl });
+          }
+          return;
+        }
+        followed.delete(tabId);
+        await videos.sendToSelected(tabId, { kind: 'applyPlayerState', state });
+        if (cause === 'resync') await toTop(tabId, { kind: 'resynced' });
+      },
+      onControlDenied: (reason) => toTop(tabId, { kind: 'controlDenied', reason }),
+      onPresence: (payload) => {
+        presence.set(tabId, payload);
+        return toTop(tabId, { kind: 'presenceUpdate', payload });
+      },
+      onSession: (payload) => {
+        sessionPayloads.set(tabId, payload);
+        void videos.sendToSelected(tabId, { kind: 'sessionInfo', payload });
+        return toTop(tabId, { kind: 'sessionInfo', payload });
+      },
+      onConnectionState: (state) => toTop(tabId, { kind: 'connectionState', state }),
+      onRoomClosed: (reason) => endTab(tabId, reason),
+    };
+  }
+
+  /** Brings a freshly loaded top frame up to date with the tab's room. */
+  async function announce(tabId: number, roomId: string): Promise<void> {
+    await toTop(tabId, { kind: 'roomConnected', roomId });
+    const payload = sessionPayloads.get(tabId);
+    if (payload) await toTop(tabId, { kind: 'sessionInfo', payload });
+    const current = presence.get(tabId);
+    if (current) await toTop(tabId, { kind: 'presenceUpdate', payload: current });
   }
 
   async function connectTab(tabId: number, roomId: string, hostToken?: string): Promise<void> {
-    await videoRouting.discover(tabId);
     const current = roomManager.getSession(tabId);
-    if (
-      current?.roomId === roomId
-      && current.hostToken === hostToken
-    ) {
-      await videoRouting.sendToTop(tabId, { kind: 'roomConnected', roomId });
+    if (current?.roomId === roomId && current.hostToken === hostToken) {
+      // Same room, new page (a reload or a followed navigation): the socket
+      // is fine, but the page's overlay and player know nothing yet.
+      await announce(tabId, roomId);
+      const payload = sessionPayloads.get(tabId);
+      if (payload) void videos.sendToSelected(tabId, { kind: 'sessionInfo', payload });
+      roomManager.requestState(tabId);
+      void videos.discover(tabId);
       return;
     }
 
-    await sessionStorage.set({
-      [activeSessionKey(tabId)]: { roomId, hostToken },
-    });
-    roomManager.connect(tabId, roomId, hostToken, {
-      onRemotePlayback: (event) =>
-        videoRouting.sendToSelected(tabId, { kind: 'remotePlaybackEvent', event }),
-      onAuthoritativeState: (state, source) => {
-        void videoRouting.sendToTop(tabId, {
-          kind: 'authoritativeState',
-          currentTime: state.currentTime,
-          isPlaying: state.isPlaying,
-          source,
-        });
-        return videoRouting.sendToSelected(tabId, {
-          kind: 'authoritativeState',
-          currentTime: state.currentTime,
-          isPlaying: state.isPlaying,
-          source,
-        });
-      },
-      onTimeSync: (state, timestamp) =>
-        videoRouting.sendToSelected(tabId, { kind: 'timeSync', state, timestamp }),
-      onPlayerState: async (state) => {
-        const tab = await tabs.get(tabId);
-        if (tab.url && new URL(tab.url).href !== new URL(state.source.pageUrl).href) {
-          await tabs.update(tabId, { url: state.source.pageUrl });
-          return;
-        }
-        await videoRouting.sendToSelected(tabId, { kind: 'applyPlayerState', state });
-      },
-      onControlDenied: (reason) =>
-        videoRouting.sendToTop(tabId, { kind: 'controlDenied', reason }),
-      onPresence: (payload) =>
-        videoRouting.sendToTop(tabId, { kind: 'presenceUpdate', payload }),
-      onSession: (payload) => {
-        sessionPayloads.set(tabId, payload);
-        void videoRouting.sendToSelected(tabId, { kind: 'sessionInfo', payload });
-        return videoRouting.sendToTop(tabId, { kind: 'sessionInfo', payload });
-      },
-      onConnectionState: (state) => {
-        return videoRouting.sendToTop(tabId, { kind: 'connectionState', state });
-      },
-      onRoomClosed: (reason) => {
-        sessionPayloads.delete(tabId);
-        void clearSessionIfCurrent(tabId, roomId);
-        void videoRouting.sendToTop(tabId, { kind: 'roomClosed', reason });
-      },
-    });
-    await videoRouting.sendToTop(tabId, { kind: 'roomConnected', roomId });
+    forget(tabId);
+    await storage.set({ [activeSessionKey(tabId)]: { roomId, hostToken } satisfies ActiveSession });
+    roomManager.connect(tabId, roomId, hostToken, callbacksFor(tabId));
+    await announce(tabId, roomId);
+    void videos.discover(tabId);
   }
 
-  return async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<unknown> {
+  async function storedActiveSession(tabId: number): Promise<ActiveSession | undefined> {
+    const key = activeSessionKey(tabId);
+    const result = await storage.get([key]);
+    const active = result[key] as ActiveSession | undefined;
+    return active?.roomId ? active : undefined;
+  }
+
+  /**
+   * Firefox may unload the background event page and start it again later
+   * with empty memory; reconnect every tab storage says is in a room.
+   */
+  async function restoreSessions(): Promise<void> {
+    const all = await storage.getAll();
+    for (const [key, value] of Object.entries(all)) {
+      if (!key.startsWith('activeSession:')) continue;
+      const tabId = Number(key.slice('activeSession:'.length));
+      const active = value as ActiveSession | undefined;
+      if (!Number.isInteger(tabId) || !active?.roomId || roomManager.getSession(tabId)) continue;
+      try {
+        await tabs.get(tabId);
+      } catch {
+        await storage.remove([key, hostSessionKey(tabId), pendingRoomKey(tabId)]);
+        continue;
+      }
+      await connectTab(tabId, active.roomId, active.hostToken);
+    }
+  }
+
+  async function handleMessage(msg: ToBackgroundMessage, sender: MessageSender): Promise<unknown> {
     const explicitTabId =
       msg.kind === 'queryVideoCandidates'
       || msg.kind === 'connectRoom'
       || msg.kind === 'leaveRoom'
+      || msg.kind === 'createRoom'
         ? msg.tabId
         : undefined;
     const tabId = explicitTabId ?? sender.tab?.id;
     if (tabId == null) return; // every message this router handles is tab-scoped
+    const fromSelectedFrame = () => videos.isSelected(tabId, sender.frameId ?? 0);
 
     switch (msg.kind) {
       case 'queryVideoCandidates':
-        return (await videoRouting.discover(tabId)).status;
+        return (await videos.discover(tabId)).status;
 
       case 'selectVideoCandidate':
-        return videoRouting.select(tabId, msg.selection);
+        return videos.select(tabId, msg.selection);
 
       case 'clearVideoSelection':
-        return (await videoRouting.clearManualSelection(tabId)).status;
+        return (await videos.clearManualSelection(tabId)).status;
 
-      case 'frameVideoCandidatesChanged': {
-        videoRouting.noteDocument(tabId, sender.frameId ?? 0, sender.documentId);
-        const result = await videoRouting.discover(tabId);
-        if (result.selectionChanged && roomManager.getSession(tabId)) {
-          const sessionPayload = sessionPayloads.get(tabId);
-          if (sessionPayload) {
-            await videoRouting.sendToSelected(tabId, {
-              kind: 'sessionInfo',
-              payload: sessionPayload,
-            });
-          }
-          roomManager.requestState(tabId);
-        }
-        return;
-      }
-
-      case 'localPlaybackEvent':
-        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
-        roomManager.reportLocalEvent(tabId, msg.event);
+      case 'frameVideoCandidatesChanged':
+        await videos.discover(tabId);
         return;
 
       case 'localPlayerEvent':
-        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
-        roomManager.reportPlayerEvent(tabId, msg.event, sender.tab?.url);
+        if (fromSelectedFrame()) roomManager.reportPlayerEvent(tabId, msg.event, sender.tab?.url);
         return;
 
       case 'playerHeartbeat':
-        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
-        roomManager.reportPlayerHeartbeat(tabId, msg.state, sender.tab?.url);
+        if (fromSelectedFrame()) roomManager.reportPlayerHeartbeat(tabId, msg.state, sender.tab?.url);
         return;
 
       case 'playerAdapterStatus':
-        await videoRouting.sendToTop(tabId, msg);
-        return;
-
-      case 'playbackHeartbeat':
-        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
-        roomManager.reportHeartbeat(tabId, msg.state);
+        if (fromSelectedFrame()) await toTop(tabId, msg);
         return;
 
       case 'playbackApplyFailed':
-        if (!videoRouting.isSelected(tabId, sender.frameId, sender.documentId)) return;
-        await videoRouting.sendToTop(tabId, { kind: 'playbackApplyFailed' });
+        if (fromSelectedFrame()) await toTop(tabId, { kind: 'playbackApplyFailed' });
         return;
+
+      case 'createRoom': {
+        const created = await api.createRoom(msg.videoUrl, msg.controlMode);
+        await storage.set({
+          [hostSessionKey(tabId)]: {
+            roomId: created.roomId,
+            hostToken: created.hostToken,
+            joinToken: created.joinToken,
+            joinUrl: created.joinUrl,
+          } satisfies HostSession,
+        });
+        await connectTab(tabId, created.roomId, created.hostToken);
+        return { roomId: created.roomId, joinUrl: created.joinUrl };
+      }
 
       case 'connectRoom':
         await connectTab(tabId, msg.roomId, msg.hostToken);
@@ -236,72 +275,68 @@ export function createMessageRouter(
 
       case 'leaveRoom':
         roomManager.disconnect(tabId, true);
-        sessionPayloads.delete(tabId);
-        videoRouting.clear(tabId);
-        await sessionStorage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);
+        await endTab(tabId, 'left');
         return;
 
       case 'joinRequested':
-        // US-2.11: navigate this tab (currently the landing page) to the
-        // real videoUrl, remembering which room to auto-join once that
-        // page loads. storage.session (not a plain variable) survives the
-        // background script being suspended/restarted — Firefox's MV3
-        // background is a non-persistent event page, not a Chrome-style
-        // service worker that's guaranteed to stay resident.
-        await sessionStorage.set({ [`pendingRoomId:${tabId}`]: msg.roomId });
+        // A new join link replaces whatever room this tab was in. Then
+        // navigate the landing page to the video, remembering which room to
+        // join once it loads. storage.session survives the event page being
+        // unloaded in between.
+        if (roomManager.getSession(tabId)) roomManager.disconnect(tabId, true);
+        forget(tabId);
+        await storage.remove([activeSessionKey(tabId), hostSessionKey(tabId)]);
+        await storage.set({ [pendingRoomKey(tabId)]: msg.roomId });
         await tabs.update(tabId, { url: msg.videoUrl });
         return;
 
-      case 'extensionInstalledCheck':
-        await videoRouting.sendToTop(tabId, { kind: 'extensionInstalledResponse' });
-        return;
-
       case 'checkPendingJoin': {
-        const activeKey = activeSessionKey(tabId);
-        const key = `pendingRoomId:${tabId}`;
-        const result = await sessionStorage.get([activeKey, key]);
-        const active = result[activeKey] as
-          | { roomId: string; hostToken?: string }
-          | undefined;
-        if (active?.roomId) {
-          await connectTab(tabId, active.roomId, active.hostToken);
-          await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId: null });
+        const key = pendingRoomKey(tabId);
+        const pending = (await storage.get([key]))[key] as string | undefined;
+        if (pending) {
+          // Cleared once read — a leftover key must never make a later,
+          // unrelated page load join the same room again.
+          await storage.remove([key]);
+          await connectTab(tabId, pending);
           return;
         }
-        const roomId = (result[key] as string | undefined) ?? null;
-        if (roomId) {
-          // Cleared once read — a stale leftover key must never cause a
-          // second, unrelated page load to auto-join the same room.
-          await sessionStorage.remove([key]);
-          await connectTab(tabId, roomId);
-          await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId: null });
-          return;
-        }
-        await videoRouting.sendToTop(tabId, { kind: 'pendingJoinResult', roomId });
+        const active = await storedActiveSession(tabId);
+        if (active) await connectTab(tabId, active.roomId, active.hostToken);
+        return;
+      }
+
+      case 'keepalive': {
+        if (roomManager.getSession(tabId)) return;
+        const active = await storedActiveSession(tabId);
+        if (active) await connectTab(tabId, active.roomId, active.hostToken);
         return;
       }
 
       case 'requestFreshLink': {
         const session = roomManager.getSession(tabId);
-        if (!session || !session.hostToken) {
-          // Either no active session for this tab, or this tab isn't the
-          // host — distinct from a network/server failure, worth telling
-          // the overlay apart so it doesn't imply "try again" for
-          // something retrying won't fix.
-          await videoRouting.sendToTop(tabId, {
-            kind: 'freshLinkError',
-            message: 'Only the host can generate a new link',
-          });
+        if (!session?.hostToken) {
+          // No session, or not the host — retrying will not help, unlike a
+          // network failure.
+          await toTop(tabId, { kind: 'freshLinkError', message: 'Only the host can generate a new link' });
           return;
         }
         try {
-          const result = await linkMinter.mintFreshLink(session.roomId, session.hostToken);
-          await videoRouting.sendToTop(tabId, { kind: 'freshLinkResult', joinUrl: result.joinUrl });
+          const result = await api.mintFreshLink(session.roomId, session.hostToken);
+          const key = hostSessionKey(tabId);
+          const stored = (await storage.get([key]))[key] as HostSession | undefined;
+          if (stored) await storage.set({ [key]: { ...stored, joinToken: result.joinToken, joinUrl: result.joinUrl } });
+          await toTop(tabId, { kind: 'freshLinkResult', joinUrl: result.joinUrl });
         } catch (err) {
-          await videoRouting.sendToTop(tabId, { kind: 'freshLinkError', message: (err as Error).message });
+          await toTop(tabId, { kind: 'freshLinkError', message: (err as Error).message });
         }
         return;
       }
     }
+  }
+
+  return {
+    handleMessage,
+    restoreSessions,
+    handleNavigation: (tabId: number, frameId: number) => videos.handleNavigation(tabId, frameId),
   };
 }

@@ -60,6 +60,32 @@ Load a production build manually from Firefox:
 3. Choose **Load Temporary Add-on**.
 4. Select `extension/dist/manifest.json`.
 
+## Video chat: self-hosted Jitsi
+
+The overlay embeds a Jitsi call. Public `meet.jit.si` is only the
+development default: it limits meetings embedded in other sites to a short
+demo, and requires the first participant to sign in as moderator, which can't
+be done inside the overlay. For real use, run your own Jitsi Meet
+([docker-jitsi-meet](https://github.com/jitsi/docker-jitsi-meet)) on a public
+HTTPS hostname and configure it to:
+
+- allow anonymous rooms (`ENABLE_AUTH=0`, which is the default);
+- disable the lobby and the pre-join page (the extension also asks the call
+  to skip pre-join);
+- allow being framed by other sites: do not send `X-Frame-Options` or a
+  restrictive `frame-ancestors` CSP from its web server.
+
+Then build the extension against it:
+
+```sh
+JITSI_DOMAIN=meet.example.com npm --prefix extension run build
+```
+
+The call starts with camera and microphone off. If a site's own security
+policy blocks the embedded call, the overlay reports it after 20 seconds and
+offers **Open in Window**, which opens the same room on the Jitsi server in
+its own window.
+
 ## Hosted Render deployment
 
 The hosted server is available at
@@ -71,6 +97,8 @@ The hosted server is available at
 - Health check path: `/healthz`
 - `ADDR=:10000`
 - `JOIN_BASE_URL=https://cowatch-2uvm.onrender.com`
+- `TRUST_PROXY=true` (Render's proxy terminates connections; without it every
+  user shares the proxy's address and its room-creation rate limit)
 
 After deploying or changing an environment variable, verify the public health
 endpoint:
@@ -96,13 +124,22 @@ a GitHub prerelease. Generated ZIP files remain outside Git history.
 
 The tag without its leading `v` must exactly match the `version` in both
 `extension/manifest.json` and `extension/package.json`. For the current
-`0.1.4` Phase 1 diagnostic version:
+`0.2.0` version:
 
 ```sh
 git push origin master
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.2.0
+git push origin v0.2.0
 ```
+
+Before the first release, set the repository variable `JITSI_DOMAIN`
+(**Settings → Secrets and variables → Actions → Variables**) to your
+self-hosted Jitsi domain; without it the build falls back to `meet.jit.si`,
+which only works as a short demo when embedded.
+
+`0.2.0` changed the room protocol. Deploy the server and hand out the
+matching extension together: a 0.1.x extension does not stay in sync with a
+0.2.0 server.
 
 When the workflow succeeds:
 
@@ -112,8 +149,8 @@ When the workflow succeeds:
 4. Choose **Load Temporary Add-on** and select the downloaded ZIP.
 
 The ZIP is unsigned, so Firefox removes the temporary installation when the
-browser restarts. The `v0.1.4` test workflow enables `[CoWatch debug]` frame
-and obrut handshake logs for playback acceptance testing. Permanent
+browser restarts. Release builds have debug logging off; build locally
+with `COWATCH_DEBUG=1` to get `[CoWatch debug]` logs. Permanent
 distribution requires Mozilla signing. If the
 server origin changes, update `JOIN_BASE_URL` on the server and
 `SERVER_BASE_URL` in `.github/workflows/package-extension.yml`, increment both
@@ -273,7 +310,14 @@ Known limitations:
 - Verify play, pause, seek, drift correction, autoplay failure, and host
   departure.
 - Verify fullscreen overlay movement and background session recovery.
-- Verify Jitsi permissions, mic/camera controls, failure display, and retry.
+- Verify Jitsi against the configured domain: join, mic/camera toggles showing
+  their state, entering and leaving fullscreen without the call reloading,
+  a forced failure showing Try Again / Open in Window.
+- Verify page reload and next-episode navigation on both sides resume sync
+  without user action, and that an idle joiner stays connected for several
+  minutes (watch the background page in `about:debugging`).
+- Verify a streaming site (YouTube) and a plain mp4 page, play/pause/seek from
+  both host and joiner in an open room.
 - Verify keyboard navigation, narrow screens, and reduced-motion preference.
 - Run `make go-test-race`, `make verify`, and inspect the Firefox lint output.
 - Review `PRIVACY.md`, the pinned Jitsi checksum, version number, and release

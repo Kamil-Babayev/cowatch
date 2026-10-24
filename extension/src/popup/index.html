@@ -3,38 +3,62 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>CoWatch</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <div class="brand">
-      <span class="status-dot" aria-hidden="true"></span>
-      <span class="wordmark">COWATCH</span>
-    </div>
+    <header class="titlebar">
+      <img class="app-icon" src="../icons/cowatch.svg" alt="" width="18" height="18" />
+      <span class="app-name">CoWatch</span>
+      <span id="room-pill" class="pill" hidden>Live</span>
+    </header>
 
-    <div id="loading-view" role="status">Checking this tab…</div>
+    <main>
+      <div id="loading-view" class="view state" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Checking this tab…</p>
+      </div>
 
-    <div id="create-view" hidden>
-      <p id="no-video-message" hidden>No video detected on this page.</p>
-      <label>
-        <span class="field-label">Control</span>
-        <select id="control-mode">
-          <option value="open">Anyone can control</option>
-          <option value="host-only">Only I can control</option>
-        </select>
-      </label>
-      <button id="create-room-btn">Create Room</button>
-    </div>
+      <div id="create-view" class="view" hidden>
+        <p class="lead">Watch the video on this page in sync with friends, with a video chat on the side.</p>
+        <p id="no-video-message" class="notice" hidden>No video detected on this page.</p>
+        <fieldset class="field">
+          <legend class="field-label">Who can control playback</legend>
+          <div class="segmented" role="radiogroup">
+            <input type="radio" name="control-mode" id="mode-open" value="open" checked />
+            <label for="mode-open">Everyone</label>
+            <input type="radio" name="control-mode" id="mode-host-only" value="host-only" />
+            <label for="mode-host-only">Only Me</label>
+          </div>
+        </fieldset>
+        <div class="footer">
+          <button id="create-room-btn" class="btn primary" type="button">Start Watch Party</button>
+        </div>
+      </div>
 
-    <div id="room-view" hidden>
-      <p>Room active</p>
-      <input id="join-url" type="text" readonly />
-      <button id="copy-link-btn">Copy Link</button>
-      <span id="expiry-note">Link expires in 10 minutes</span>
-      <button id="leave-room-btn">Leave Room</button>
-    </div>
+      <div id="room-view" class="view" hidden>
+        <section class="card">
+          <h1 id="room-title" class="card-title">You’re hosting</h1>
+          <div id="invite" class="invite">
+            <span class="field-label" id="invite-label">Invite link</span>
+            <div class="link-row">
+              <div id="join-url" class="link-field" role="textbox" aria-readonly="true" aria-labelledby="invite-label" tabindex="0">
+                <span class="link-head"></span><span class="link-tail"></span>
+              </div>
+              <button id="copy-link-btn" class="btn" type="button">Copy</button>
+            </div>
+            <span id="expiry-note" class="hint">Copy makes a fresh link, valid for 10 minutes.</span>
+          </div>
+          <p id="guest-note" class="hint" hidden>Playback controls and the video chat are on the page.</p>
+        </section>
+        <div class="footer">
+          <button id="leave-room-btn" class="btn destructive" type="button">Leave Watch Party</button>
+        </div>
+      </div>
 
-    <p id="status" role="status" aria-live="polite"></p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
 
     <script src="index.js"></script>
   </body>
