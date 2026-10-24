@@ -78,11 +78,12 @@ function pushButton(doc: Document, text: string, primary: boolean, onClick: () =
   return button;
 }
 
-function describe(candidate: VideoCandidate, index: number): { name: string; detail: string } {
-  const where = candidate.frameId === 0 ? 'On this page' : 'In an embedded player';
-  const size = `${Math.round(candidate.width)}×${Math.round(candidate.height)}`;
-  const state = candidate.isPlaying ? 'playing' : candidate.effectiveVisibleArea > 0 ? 'paused' : 'out of view';
-  return { name: `Video ${index + 1}`, detail: `${where} · ${size} · ${state}` };
+/** Names a video by where it is, with its size and state as the detail. */
+function describe(candidate: VideoCandidate): { name: string; detail: string } {
+  const name = candidate.frameId === 0 ? 'On this page' : 'Embedded player';
+  const size = `${Math.round(candidate.width)} × ${Math.round(candidate.height)}`;
+  const state = candidate.isPlaying ? 'playing' : candidate.effectiveVisibleArea > 0 ? 'paused' : 'scrolled out of view';
+  return { name, detail: `${size}, ${state}` };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -447,8 +448,8 @@ export function createOverlayView(
         empty.textContent = 'No videos found on this page.';
         list.append(empty);
       }
-      tabStatus.candidates.forEach((candidate, index) => {
-        const { name, detail } = describe(candidate, index);
+      tabStatus.candidates.forEach((candidate) => {
+        const { name, detail } = describe(candidate);
         const selected = Boolean(tabStatus.manual)
           && tabStatus.selected?.frameId === candidate.frameId
           && tabStatus.selected?.candidateId === candidate.candidateId;

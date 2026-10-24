@@ -174,8 +174,8 @@ test('the picker lists videos as radios and reports the choice', () => {
   view.showPicker(status);
   const items = [...root.querySelectorAll('.picker-item')] as HTMLElement[];
   assert.deepEqual(items.map((item) => item.getAttribute('aria-checked')), ['false', 'false', 'true']);
-  assert.match(items[1].textContent ?? '', /On this page · 640×360 · playing/);
-  assert.match(items[2].textContent ?? '', /embedded player · 320×180 · out of view/);
+  assert.match(items[1].textContent ?? '', /On this page640 × 360, playing/);
+  assert.match(items[2].textContent ?? '', /Embedded player320 × 180, scrolled out of view/);
   items[2].click();
   items[0].click();
   assert.deepEqual(calls, ['select:b', 'auto']);

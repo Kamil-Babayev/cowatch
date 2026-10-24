@@ -61,16 +61,25 @@ async function showCreate(tab: browser.tabs.Tab): Promise<void> {
   showView('create');
 }
 
+/** Shows a URL shortened in the middle, keeping the token's end visible. */
+function setJoinUrl(url: string): void {
+  const field = element('join-url');
+  const tail = url.slice(-8);
+  field.querySelector('.link-head')!.textContent = url.slice(0, -8);
+  field.querySelector('.link-tail')!.textContent = tail;
+  field.title = url;
+}
+
 function showHostRoom(session: StoredSession): void {
-  element('room-role').textContent = 'Host';
+  element('room-title').textContent = 'You’re hosting';
   element('invite').hidden = false;
   element('guest-note').hidden = true;
-  element<HTMLInputElement>('join-url').value = session.joinUrl;
+  setJoinUrl(session.joinUrl);
   showView('room');
 }
 
 function showGuestRoom(): void {
-  element('room-role').textContent = 'Guest';
+  element('room-title').textContent = 'You joined a watch party';
   element('invite').hidden = true;
   element('guest-note').hidden = false;
   showView('room');

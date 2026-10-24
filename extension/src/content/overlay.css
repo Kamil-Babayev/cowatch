@@ -10,13 +10,15 @@
  */
 
 :host {
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, 'CoWatch Inter', 'Segoe UI', system-ui, sans-serif;
   --accent: #007aff;
   --accent-pressed: #0062cc;
   --destructive: #ff3b30;
   --success: #34c759;
   --label: rgba(0, 0, 0, 0.85);
   --secondary-label: rgba(0, 0, 0, 0.5);
+  /* Over unknown, often bright video the HUD needs firmer secondary text. */
+  --hud-secondary: rgba(0, 0, 0, 0.62);
   --material: rgba(246, 246, 246, 0.78);
   --material-solid: #f6f6f6;
   --control: rgba(0, 0, 0, 0.05);
@@ -43,6 +45,7 @@
     --success: #30d158;
     --label: rgba(255, 255, 255, 0.88);
     --secondary-label: rgba(255, 255, 255, 0.55);
+    --hud-secondary: rgba(255, 255, 255, 0.68);
     --material: rgba(40, 40, 40, 0.78);
     --material-solid: #282828;
     --control: rgba(255, 255, 255, 0.08);
@@ -147,7 +150,7 @@
 
 .control {
   font-size: 11px;
-  color: var(--secondary-label);
+  color: var(--hud-secondary);
 }
 
 .separator {

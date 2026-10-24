@@ -18,3 +18,19 @@ the expected shape.
 
 Updates must replace the file intentionally, record the new retrieval date and
 checksum here, and rerun the complete Firefox/Jitsi manual verification.
+
+# Vendored Inter font
+
+`fonts/inter-latin-wght.woff2` is the Latin-subset variable (weight 100–900)
+build of Inter 4, taken from the `@fontsource-variable/inter@5.3.0` npm
+package on 2026-10-24. CoWatch's surfaces ask for the Mac system font first;
+Inter is the fallback on Windows and Linux, because SF Pro cannot be
+redistributed.
+
+- SHA-256: `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62`
+- Upstream: https://github.com/rsms/inter
+- License: SIL Open Font License 1.1 (see `fonts/INTER-LICENSE.txt`)
+
+The same file is served with the join landing page from
+`server/static/join/inter-latin-wght.woff2`.
+

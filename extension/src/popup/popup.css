@@ -5,9 +5,15 @@
  * landing.css.
  */
 
+@font-face {
+  font-family: 'CoWatch Inter';
+  src: url('../fonts/inter-latin-wght.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font: -apple-system, BlinkMacSystemFont, 'CoWatch Inter', 'Segoe UI', system-ui, sans-serif;
   --accent: #007aff;
   --accent-pressed: #0062cc;
   --destructive: #ff3b30;
@@ -68,26 +74,15 @@ body {
 .titlebar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 7px;
   height: 38px;
   padding: 0 14px;
   border-bottom: 0.5px solid var(--separator);
 }
 
-.app {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
 .app-icon {
   width: 18px;
   height: 18px;
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .app-name {
@@ -95,6 +90,7 @@ body {
 }
 
 .pill {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -240,20 +236,15 @@ main {
   background: var(--accent-pressed);
 }
 
-.btn.small {
-  padding: 3px 10px;
-  font-size: 12px;
-}
-
 .btn.destructive {
-  align-self: center;
-  background: transparent;
-  box-shadow: none;
   color: var(--destructive);
 }
 
-.btn.destructive:hover {
-  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+/* macOS puts a dialog's buttons at the bottom right, default action last. */
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .btn:disabled {
@@ -270,28 +261,10 @@ main {
   border: 0.5px solid var(--hairline);
 }
 
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .card-title {
+  margin: 0;
+  font-size: 13px;
   font-weight: 600;
-}
-
-.badge {
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--secondary-label);
-  background: var(--control-track);
-}
-
-.badge:empty {
-  display: none;
 }
 
 .invite {
@@ -305,18 +278,35 @@ main {
   gap: 6px;
 }
 
-#join-url {
+/*
+ * Read-only URL field, shortened in the middle like Finder and Safari do,
+ * so both the host name and the end of the token stay visible.
+ */
+.link-field {
   flex: 1;
+  display: flex;
   min-width: 0;
   padding: 3px 7px;
   border-radius: 5px;
   border: 0.5px solid var(--hairline);
   background: var(--window);
   color: var(--label);
-  font: 11.5px var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: all;
+  cursor: text;
 }
 
-#join-url:focus-visible {
+.link-head {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.link-tail {
+  flex: none;
+}
+
+.link-field:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }

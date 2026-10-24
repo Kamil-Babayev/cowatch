@@ -5,76 +5,72 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>CoWatch — Join</title>
+    <link rel="icon" href="cowatch.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="landing.css" />
   </head>
   <body>
-    <main class="window" aria-labelledby="app-name">
-      <header class="titlebar">
-        <svg class="app-icon" viewBox="0 0 20 20" aria-hidden="true">
-          <rect x="1.5" y="3.5" width="17" height="11" rx="2.5" />
-          <path d="M8.25 6.75v4.5l4-2.25z" />
-          <path d="M6 17.5h8" />
+    <svg class="wallpaper" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop class="sky-top" offset="0" /><stop class="sky-bottom" offset="1" /></linearGradient>
+        <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop class="w1-top" offset="0" /><stop class="w1-bottom" offset="0.6" /></linearGradient>
+        <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop class="w2-top" offset="0" /><stop class="w2-bottom" offset="0.6" /></linearGradient>
+        <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1"><stop class="w3-top" offset="0" /><stop class="w3-bottom" offset="0.6" /></linearGradient>
+        <linearGradient id="g4" x1="0" y1="0" x2="0" y2="1"><stop class="w4-top" offset="0" /><stop class="w4-bottom" offset="0.6" /></linearGradient>
+      </defs>
+      <rect width="1440" height="900" fill="url(#sky)" />
+      <path d="M0 250C240 160 420 330 690 300S1130 120 1440 210V900H0Z" fill="url(#g1)" />
+      <path d="M0 420C260 330 470 520 760 470S1180 300 1440 380V900H0Z" fill="url(#g2)" />
+      <path d="M0 590C230 520 520 690 820 630S1210 500 1440 560V900H0Z" fill="url(#g3)" />
+      <path d="M0 740C300 680 560 820 860 770S1240 670 1440 720V900H0Z" fill="url(#g4)" />
+    </svg>
+
+    <main class="alert" aria-label="CoWatch invite">
+      <div class="icon">
+        <img src="cowatch.svg" alt="" width="64" height="64" />
+        <svg class="badge" viewBox="0 0 24 24" aria-hidden="true">
+          <path class="badge-shape" d="M12 2.5 22.5 20.5H1.5Z" />
+          <path class="badge-mark" d="M12 9v5.5M12 17.25v.5" />
         </svg>
-        <span id="app-name" class="app-name">CoWatch</span>
-      </header>
-
-      <div class="content">
-        <section id="state-loading" class="state" role="status" aria-live="polite">
-          <span class="spinner" aria-hidden="true"></span>
-          <p>Checking your invite…</p>
-        </section>
-
-        <section id="state-valid" class="state" hidden>
-          <svg class="symbol accent" viewBox="0 0 40 40" aria-hidden="true">
-            <circle cx="20" cy="20" r="17" />
-            <path d="M16.5 13.5v13l10.5-6.5z" />
-          </svg>
-          <h1>You’re invited to watch together</h1>
-          <p>
-            Continue to open <strong id="destination-domain"></strong> and join the watch party.
-            Playback stays in sync for everyone.
-          </p>
-          <button id="continue-btn" class="btn primary" type="button">Continue</button>
-        </section>
-
-        <section id="state-expired" class="state" role="alert" hidden>
-          <svg class="symbol warning" viewBox="0 0 40 40" aria-hidden="true">
-            <circle cx="20" cy="20" r="17" />
-            <path d="M20 11v10l6 4" />
-          </svg>
-          <h1>This invite has expired</h1>
-          <p>Invite links last ten minutes. Ask whoever shared it for a fresh one.</p>
-        </section>
-
-        <section id="state-not-found" class="state" role="alert" hidden>
-          <svg class="symbol muted" viewBox="0 0 40 40" aria-hidden="true">
-            <circle cx="20" cy="20" r="17" />
-            <path d="M15.5 15.5a4.5 4.5 0 1 1 6.5 4c-1.4.8-2 1.6-2 3M20 27.5v.5" />
-          </svg>
-          <h1>This invite doesn’t look right</h1>
-          <p>Double-check the link, or ask for a new one.</p>
-        </section>
-
-        <section id="state-no-extension" class="state" role="alert" hidden>
-          <svg class="symbol accent" viewBox="0 0 40 40" aria-hidden="true">
-            <rect x="5" y="9" width="30" height="22" rx="4" />
-            <path d="M20 14v10M15.5 19.5L20 24l4.5-4.5" />
-          </svg>
-          <h1>Install CoWatch first</h1>
-          <p>Joining needs the CoWatch extension for Firefox. Install it, then reload this page.</p>
-          <a class="btn primary btn-link" href="https://addons.mozilla.org/" target="_blank" rel="noopener">Get CoWatch</a>
-        </section>
-
-        <section id="state-error" class="state" role="alert" hidden>
-          <svg class="symbol danger" viewBox="0 0 40 40" aria-hidden="true">
-            <circle cx="20" cy="20" r="17" />
-            <path d="M20 12v10M20 27.5v.5" />
-          </svg>
-          <h1>Couldn’t check this invite</h1>
-          <p>Check your connection and try again.</p>
-          <button id="retry-btn" class="btn" type="button">Try Again</button>
-        </section>
       </div>
+
+      <section id="state-loading" class="state" role="status" aria-live="polite">
+        <h1>Checking invite…</h1>
+        <span class="spinner" aria-hidden="true"></span>
+      </section>
+
+      <section id="state-valid" class="state" hidden>
+        <h1>Join the watch party?</h1>
+        <p>This opens <strong id="destination-domain"></strong> in this tab and keeps your video in sync with everyone else’s.</p>
+        <div class="buttons">
+          <button id="continue-btn" class="btn default" type="button">Join</button>
+        </div>
+      </section>
+
+      <section id="state-expired" class="state" role="alert" hidden>
+        <h1>This invite has expired</h1>
+        <p>Invites work for 10 minutes. Ask the host to copy a new one.</p>
+      </section>
+
+      <section id="state-not-found" class="state" role="alert" hidden>
+        <h1>This invite link isn’t valid</h1>
+        <p>Check that the whole link was copied, or ask the host for a new one.</p>
+      </section>
+
+      <section id="state-no-extension" class="state" role="alert" hidden>
+        <h1>CoWatch isn’t installed</h1>
+        <p>Install the CoWatch extension for Firefox, then reload this page.</p>
+        <div class="buttons">
+          <a class="btn default btn-link" href="https://github.com/Kamil-Babayev/cowatch/releases/latest" target="_blank" rel="noopener">Get CoWatch</a>
+        </div>
+      </section>
+
+      <section id="state-error" class="state" role="alert" hidden>
+        <h1>Can’t reach CoWatch</h1>
+        <p>Check your internet connection, then try again.</p>
+        <div class="buttons">
+          <button id="retry-btn" class="btn" type="button">Try Again</button>
+        </div>
+      </section>
     </main>
 
     <script src="app.js"></script>
